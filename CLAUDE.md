@@ -190,6 +190,7 @@ In `/apps/optimizer/src/`:
 - `connectors/base.py` — shared exception hierarchy (`ConnectorError`, `ConnectorAuthError`, `ConnectorUnavailable`, `ConnectorMalformed`) for all third-party clients (PR2)
 - `connectors/homewizard.py` — async HomeWizard P1 client against the **local v1 API** (`/api`, `/api/v1/data`). Reads `HOMEWIZARD_BASE_URL` + optional `HOMEWIZARD_HEADER_*` env vars. Tunnel choice deferred to PR5 — see `infra/SETUP.md` (PR2)
 - `connectors/entsoe.py` — async ENTSO-E Transparency Platform client. `get_day_ahead_prices(date)` returns 24 (or 23/25 on DST) `HourlyPrice` rows with raw spot €/MWh and **VAT-inclusive** all-in EUR/kWh: `((spot/1000) + 0.1108 + 0.025) * 1.21`. Matches Tibber/Frank/EnergyZero retail quoting. Uses `defusedxml` for safe XML parsing. Reads `ENTSOE_API_TOKEN` from env / Secret Manager (PR3)
+- `connectors/openmeteo.py` — async Open-Meteo client (no auth) returning hourly temp + cloud cover for Sittard, with a crude PV estimate (sine elevation × cloud factor). Defaults to 50.99°N/5.87°E; overridable via `OPENMETEO_LATITUDE`/`OPENMETEO_LONGITUDE`/`OPENMETEO_BASE_URL`. Solcast replaces the PV model post-launch (PR4)
 - `main.py` — FastAPI app with all endpoints scaffolded; uses placeholder `CLOUD_SCHEDULER_TOKEN` (replace with OIDC), mocks `_gather_state()` and `_apply_plan()`. Imports `src.connectors.*`, `src.optimizer.v0`, `src.ai.claude` which **do not exist yet** — service won't start until PR2/3/4/5 land. Ship `main.py` wiring in PR5.
 
 In `/apps/optimizer/`:
@@ -204,7 +205,7 @@ In root:
 - `README.md` — public-facing project overview
 
 **Not yet built (needs you):**
-- `connectors/` — `weheat.py`, `resideo.py`, `shelly.py`, `growatt.py`, `openmeteo.py`
+- `connectors/` — `weheat.py`, `resideo.py`, `shelly.py`, `growatt.py`
 - `ai/claude.py` — chat backend with system-context injection
 - `safety/failsafe.py`, `safety/watchdog.py` — failsafe checks
 - Frontend: `Advanced.tsx` (port from artifact preview), `useLiveState`, `OverrideSheet`, `Settings/*`, `Learning/Activation.tsx`, routing, Tailwind setup
@@ -225,10 +226,9 @@ Work these top-to-bottom unless you discover a blocker. Each PR is its own branc
    - Async client for `web-api.tp.entsoe.eu/api`, document type A44 / process A01, NL domain `10YNL----------L`. Returns hourly `HourlyPrice(timestamp_utc, spot_eur_mwh, all_in_eur_kwh)` for a given local day; tolerates DST 23/25-hour days.
    - Conversion: `((spot/1000) + 0.1108 + 0.025) * 1.21` — VAT-inclusive, matches how Tibber/Frank/EnergyZero quote tariffs. Constants live in `entsoe.py`.
    - Token via `ENTSOE_API_TOKEN` query param. `defusedxml` added for safe XML parsing. ruff + mypy --strict + 18 new tests (53 total) pass.
-4. **PR4 — Open-Meteo weather connector**
-   - Free, no key
-   - Hourly temp + cloud cover for Sittard (51.99°N, 5.87°E)
-   - Crude PV estimate from cloud cover until Solcast subscription (later)
+4. **PR4 — Open-Meteo weather connector** ✅ shipped
+   - `connectors/openmeteo.py` + 21 MockTransport tests. Hourly temp + cloud cover for Sittard, parsed into UTC `HourlyForecast` rows with a crude PV estimate. Solcast replaces the PV model post-launch.
+   - Sittard coordinates corrected: **50.99°N**, 5.87°E (the earlier 51.99 was a typo — that latitude lies near Eindhoven).
 5. **PR5 — Cloud Run + WIF skeleton deploy**
    - `Dockerfile`, `pyproject.toml`, `cloudbuild.yaml`
    - WIF bindings: Cloud Run SA → Firebase, Secret Manager, Cloud Scheduler invoker
