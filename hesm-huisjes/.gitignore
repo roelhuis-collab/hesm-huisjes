@@ -1,0 +1,23 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+.env
+.env.local
+
+# Node
+node_modules/
+dist/
+.netlify/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+.DS_Store
+
+# Secrets
+*.key
+*.pem
+service-account*.json

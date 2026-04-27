@@ -1,0 +1,37 @@
+{
+  "name": "HESM by Huisjes",
+  "short_name": "HESM",
+  "description": "Home Energy System Management voor Roel's huis",
+  "start_url": "/",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#020617",
+  "theme_color": "#020617",
+  "categories": ["utilities", "productivity"],
+  "icons": [
+    {
+      "src": "/icons/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/icons/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ],
+  "shortcuts": [
+    {
+      "name": "Override",
+      "short_name": "Override",
+      "url": "/?override=open"
+    },
+    {
+      "name": "Details",
+      "short_name": "Details",
+      "url": "/advanced"
+    }
+  ]
+}
