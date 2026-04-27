@@ -189,7 +189,7 @@ In `/apps/optimizer/src/`:
 - `state/firestore.py` — Firestore data layer with all collection helpers used by `main.py`, `learning_check.py`, `push.py` (PR1)
 - `connectors/base.py` — shared exception hierarchy (`ConnectorError`, `ConnectorAuthError`, `ConnectorUnavailable`, `ConnectorMalformed`) for all third-party clients (PR2)
 - `connectors/homewizard.py` — async HomeWizard P1 client against the **local v1 API** (`/api`, `/api/v1/data`). Reads `HOMEWIZARD_BASE_URL` + optional `HOMEWIZARD_HEADER_*` env vars. Tunnel choice deferred to PR5 — see `infra/SETUP.md` (PR2)
-- `connectors/entsoe.py` — async ENTSO-E Transparency Platform client. `get_day_ahead_prices(date)` returns 24 (or 23/25 on DST) `HourlyPrice` rows with raw spot €/MWh and pre-VAT all-in EUR/kWh. Uses `defusedxml` for safe XML parsing. Reads `ENTSOE_API_TOKEN` from env / Secret Manager. **BTW (21% VAT) handling pending Roel's confirmation** — see PR3 description (PR3)
+- `connectors/entsoe.py` — async ENTSO-E Transparency Platform client. `get_day_ahead_prices(date)` returns 24 (or 23/25 on DST) `HourlyPrice` rows with raw spot €/MWh and **VAT-inclusive** all-in EUR/kWh: `((spot/1000) + 0.1108 + 0.025) * 1.21`. Matches Tibber/Frank/EnergyZero retail quoting. Uses `defusedxml` for safe XML parsing. Reads `ENTSOE_API_TOKEN` from env / Secret Manager (PR3)
 - `main.py` — FastAPI app with all endpoints scaffolded; uses placeholder `CLOUD_SCHEDULER_TOKEN` (replace with OIDC), mocks `_gather_state()` and `_apply_plan()`. Imports `src.connectors.*`, `src.optimizer.v0`, `src.ai.claude` which **do not exist yet** — service won't start until PR2/3/4/5 land. Ship `main.py` wiring in PR5.
 
 In `/apps/optimizer/`:
@@ -223,8 +223,8 @@ Work these top-to-bottom unless you discover a blocker. Each PR is its own branc
    - Established the connector pattern: shared `ConnectorError` hierarchy in `connectors/base.py`, async httpx client, env-driven config, MockTransport tests. PR3+ copy this shape.
 3. **PR3 — ENTSO-E prices connector** ✅ shipped
    - Async client for `web-api.tp.entsoe.eu/api`, document type A44 / process A01, NL domain `10YNL----------L`. Returns hourly `HourlyPrice(timestamp_utc, spot_eur_mwh, all_in_eur_kwh)` for a given local day; tolerates DST 23/25-hour days.
-   - Conversion: `(spot/1000) + 0.1108 + 0.025`. **BTW (21% VAT) is NOT included** — flagged for Roel's confirmation before wiring into the cost objective.
-   - Token via `ENTSOE_API_TOKEN` query param. `defusedxml` added for safe XML parsing. ruff + mypy --strict + 17 new tests (52 total) pass.
+   - Conversion: `((spot/1000) + 0.1108 + 0.025) * 1.21` — VAT-inclusive, matches how Tibber/Frank/EnergyZero quote tariffs. Constants live in `entsoe.py`.
+   - Token via `ENTSOE_API_TOKEN` query param. `defusedxml` added for safe XML parsing. ruff + mypy --strict + 18 new tests (53 total) pass.
 4. **PR4 — Open-Meteo weather connector**
    - Free, no key
    - Hourly temp + cloud cover for Sittard (51.99°N, 5.87°E)

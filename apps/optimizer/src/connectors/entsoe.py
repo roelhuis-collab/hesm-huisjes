@@ -32,13 +32,12 @@ each carrying a 1-based ``position`` and ``price.amount`` in €/MWh.
 
 Conversion to all-in EUR/kWh
 ----------------------------
-``all_in = (spot_eur_mwh / 1000) + ENERGY_TAX + SUPPLIER_MARKUP``
+``all_in = ((spot_eur_mwh / 1000) + ENERGY_TAX + SUPPLIER_MARKUP) * (1 + VAT_RATE)``
 
-NOTE — BTW (21% Dutch VAT) is **not** applied here. Dutch retail tariffs
-typically present prices VAT-inclusive on top of spot+tax+markup. This
-connector returns the pre-VAT all-in price; the optimizer should agree on
-one convention with whatever the import-side meter price is compared to.
-Roel to confirm the formula before this is wired into the cost function.
+This matches how Tibber / Frank / EnergyZero present their tariffs: spot
+clearing price plus excise tax plus supplier markup, with 21% BTW applied
+to the whole subtotal. The dashboard's savings figures and the
+optimizer's cost objective both work in these VAT-inclusive €/kWh.
 
 References
 ----------
@@ -94,6 +93,8 @@ class EntsoeMalformed(EntsoeError, ConnectorMalformed):
 ENERGY_TAX_EUR_KWH: float = 0.1108
 # Average dynamic-tariff supplier fee (Tibber / Frank / EnergyZero range).
 SUPPLIER_MARKUP_EUR_KWH: float = 0.025
+# Dutch VAT applied to the full subtotal (spot + tax + markup).
+VAT_RATE: float = 0.21
 
 # Bidding-zone EIC code for the Netherlands.
 _NL_DOMAIN = "10YNL----------L"
@@ -114,7 +115,8 @@ class HourlyPrice(BaseModel):
 
     ``timestamp_utc`` is the start of the hourly slot in UTC.
     ``spot_eur_mwh`` is the raw EPEX clearing price.
-    ``all_in_eur_kwh`` adds energy tax and supplier markup; pre-VAT.
+    ``all_in_eur_kwh`` is VAT-inclusive: spot + energy tax + supplier
+    markup, all multiplied by ``1 + VAT_RATE``.
     """
 
     model_config = ConfigDict(extra="ignore")
@@ -325,7 +327,8 @@ def _parse_day_ahead_prices(body: bytes) -> list[HourlyPrice]:
 
                 # position is 1-based; each step is one hour.
                 ts_utc = period_start + timedelta(hours=position - 1)
-                all_in = (spot_eur_mwh / 1000.0) + ENERGY_TAX_EUR_KWH + SUPPLIER_MARKUP_EUR_KWH
+                subtotal = (spot_eur_mwh / 1000.0) + ENERGY_TAX_EUR_KWH + SUPPLIER_MARKUP_EUR_KWH
+                all_in = subtotal * (1.0 + VAT_RATE)
                 out.append(
                     HourlyPrice(
                         timestamp_utc=ts_utc,

@@ -31,6 +31,7 @@ from src.connectors import (
 from src.connectors.entsoe import (
     ENERGY_TAX_EUR_KWH,
     SUPPLIER_MARKUP_EUR_KWH,
+    VAT_RATE,
     EntsoeAuthError,
     EntsoeClient,
     EntsoeMalformed,
@@ -122,11 +123,12 @@ async def test_get_day_ahead_prices_happy_path() -> None:
     assert prices[0].timestamp_utc == datetime(2026, 4, 26, 22, 0, tzinfo=UTC)
 
     # Conversion math: position 1 → 51.0 €/MWh; position 5 → 55.0 €/MWh.
-    expected_first = (51.0 / 1000.0) + ENERGY_TAX_EUR_KWH + SUPPLIER_MARKUP_EUR_KWH
+    # all_in = (spot/1000 + tax + markup) * (1 + VAT)
+    expected_first = ((51.0 / 1000.0) + ENERGY_TAX_EUR_KWH + SUPPLIER_MARKUP_EUR_KWH) * (1 + VAT_RATE)
     assert prices[0].spot_eur_mwh == pytest.approx(51.0)
     assert prices[0].all_in_eur_kwh == pytest.approx(expected_first)
 
-    expected_fifth = (55.0 / 1000.0) + ENERGY_TAX_EUR_KWH + SUPPLIER_MARKUP_EUR_KWH
+    expected_fifth = ((55.0 / 1000.0) + ENERGY_TAX_EUR_KWH + SUPPLIER_MARKUP_EUR_KWH) * (1 + VAT_RATE)
     assert prices[4].spot_eur_mwh == pytest.approx(55.0)
     assert prices[4].all_in_eur_kwh == pytest.approx(expected_fifth)
 
@@ -309,5 +311,18 @@ def test_conversion_constants_match_briefing() -> None:
     """Sanity-check the formula constants — guards against accidental edits."""
     assert ENERGY_TAX_EUR_KWH == 0.1108
     assert SUPPLIER_MARKUP_EUR_KWH == 0.025
+    assert VAT_RATE == 0.21
+
+
+def test_realistic_dutch_retail_price_lands_in_expected_range() -> None:
+    """
+    Sanity: at a typical NL spot price (€80/MWh), the all-in EUR/kWh should
+    land near €0.29, i.e. the same ballpark Tibber/Frank/EnergyZero quote.
+    Catches accidental drops or doublings of the VAT factor.
+    """
+    spot_eur_mwh = 80.0
+    subtotal = (spot_eur_mwh / 1000.0) + ENERGY_TAX_EUR_KWH + SUPPLIER_MARKUP_EUR_KWH
+    all_in = subtotal * (1 + VAT_RATE)
+    assert 0.25 < all_in < 0.32, f"all_in price {all_in:.4f} outside expected NL retail band"
 
 
