@@ -189,6 +189,7 @@ In `/apps/optimizer/src/`:
 - `state/firestore.py` — Firestore data layer with all collection helpers used by `main.py`, `learning_check.py`, `push.py` (PR1)
 - `connectors/base.py` — shared exception hierarchy (`ConnectorError`, `ConnectorAuthError`, `ConnectorUnavailable`, `ConnectorMalformed`) for all third-party clients (PR2)
 - `connectors/homewizard.py` — async HomeWizard P1 client against the **local v1 API** (`/api`, `/api/v1/data`). Reads `HOMEWIZARD_BASE_URL` + optional `HOMEWIZARD_HEADER_*` env vars. Tunnel choice deferred to PR5 — see `infra/SETUP.md` (PR2)
+- `connectors/entsoe.py` — async ENTSO-E Transparency Platform client. `get_day_ahead_prices(date)` returns 24 (or 23/25 on DST) `HourlyPrice` rows with raw spot €/MWh and pre-VAT all-in EUR/kWh. Uses `defusedxml` for safe XML parsing. Reads `ENTSOE_API_TOKEN` from env / Secret Manager. **BTW (21% VAT) handling pending Roel's confirmation** — see PR3 description (PR3)
 - `main.py` — FastAPI app with all endpoints scaffolded; uses placeholder `CLOUD_SCHEDULER_TOKEN` (replace with OIDC), mocks `_gather_state()` and `_apply_plan()`. Imports `src.connectors.*`, `src.optimizer.v0`, `src.ai.claude` which **do not exist yet** — service won't start until PR2/3/4/5 land. Ship `main.py` wiring in PR5.
 
 In `/apps/optimizer/`:
@@ -203,7 +204,7 @@ In root:
 - `README.md` — public-facing project overview
 
 **Not yet built (needs you):**
-- `connectors/` — `weheat.py`, `resideo.py`, `shelly.py`, `growatt.py`, `entsoe.py`, `openmeteo.py`
+- `connectors/` — `weheat.py`, `resideo.py`, `shelly.py`, `growatt.py`, `openmeteo.py`
 - `ai/claude.py` — chat backend with system-context injection
 - `safety/failsafe.py`, `safety/watchdog.py` — failsafe checks
 - Frontend: `Advanced.tsx` (port from artifact preview), `useLiveState`, `OverrideSheet`, `Settings/*`, `Learning/Activation.tsx`, routing, Tailwind setup
@@ -220,10 +221,10 @@ Work these top-to-bottom unless you discover a blocker. Each PR is its own branc
    - Built against the **local v1 API** — HomeWizard has no public cloud API.
    - Local-network exposure delegated to a tunnel (Cloudflare Tunnel or Tailscale) on an always-on LAN device. Choice deferred to PR5; rationale + options in `infra/SETUP.md`.
    - Established the connector pattern: shared `ConnectorError` hierarchy in `connectors/base.py`, async httpx client, env-driven config, MockTransport tests. PR3+ copy this shape.
-3. **PR3 — ENTSO-E prices connector**
-   - Free, requires API key (request via email — Roel will arrange)
-   - 24-hour day-ahead prices for NL bidding zone
-   - Convert €/MWh wholesale → EUR/kWh all-in (add belasting €0,1108/kWh + supplier fee €0,025/kWh)
+3. **PR3 — ENTSO-E prices connector** ✅ shipped
+   - Async client for `web-api.tp.entsoe.eu/api`, document type A44 / process A01, NL domain `10YNL----------L`. Returns hourly `HourlyPrice(timestamp_utc, spot_eur_mwh, all_in_eur_kwh)` for a given local day; tolerates DST 23/25-hour days.
+   - Conversion: `(spot/1000) + 0.1108 + 0.025`. **BTW (21% VAT) is NOT included** — flagged for Roel's confirmation before wiring into the cost objective.
+   - Token via `ENTSOE_API_TOKEN` query param. `defusedxml` added for safe XML parsing. ruff + mypy --strict + 17 new tests (52 total) pass.
 4. **PR4 — Open-Meteo weather connector**
    - Free, no key
    - Hourly temp + cloud cover for Sittard (51.99°N, 5.87°E)
