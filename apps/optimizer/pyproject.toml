@@ -43,6 +43,8 @@ ignore = [
     "E501",   # line length (handled by formatter)
     "RUF002", # docstrings use em/en dashes intentionally throughout
     "RUF003", # comments use em/en dashes intentionally throughout
+    "N818",   # exception names like ConnectorUnavailable read better
+              # than ConnectorUnavailableError at the call site
 ]
 
 [tool.ruff.lint.per-file-ignores]
@@ -57,6 +59,7 @@ disallow_any_generics = true
 # Scope expands per PR. PR1 introduces the state layer; subsequent PRs
 # (connectors, AI, full main.py wiring) widen this list as they land.
 files = [
+    "src/connectors",
     "src/state",
     "src/optimizer/policy.py",
     "src/optimizer/learning.py",

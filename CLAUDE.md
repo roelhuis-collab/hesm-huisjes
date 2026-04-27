@@ -187,6 +187,8 @@ In `/apps/optimizer/src/`:
 - `notifications/push.py` — FCM helper using Firebase Admin SDK (web push + APNS configured)
 - `state/models.py` — Pydantic DTOs for `SystemState`, `Decision`, `FCMToken`, plus persistence mirrors of `ActivationStatus` / `LearnedProfile` (PR1)
 - `state/firestore.py` — Firestore data layer with all collection helpers used by `main.py`, `learning_check.py`, `push.py` (PR1)
+- `connectors/base.py` — shared exception hierarchy (`ConnectorError`, `ConnectorAuthError`, `ConnectorUnavailable`, `ConnectorMalformed`) for all third-party clients (PR2)
+- `connectors/homewizard.py` — async HomeWizard P1 client against the **local v1 API** (`/api`, `/api/v1/data`). Reads `HOMEWIZARD_BASE_URL` + optional `HOMEWIZARD_HEADER_*` env vars. Tunnel choice deferred to PR5 — see `infra/SETUP.md` (PR2)
 - `main.py` — FastAPI app with all endpoints scaffolded; uses placeholder `CLOUD_SCHEDULER_TOKEN` (replace with OIDC), mocks `_gather_state()` and `_apply_plan()`. Imports `src.connectors.*`, `src.optimizer.v0`, `src.ai.claude` which **do not exist yet** — service won't start until PR2/3/4/5 land. Ship `main.py` wiring in PR5.
 
 In `/apps/optimizer/`:
@@ -201,7 +203,7 @@ In root:
 - `README.md` — public-facing project overview
 
 **Not yet built (needs you):**
-- `connectors/` — `weheat.py`, `resideo.py`, `shelly.py`, `growatt.py`, `homewizard.py`, `entsoe.py`, `openmeteo.py`
+- `connectors/` — `weheat.py`, `resideo.py`, `shelly.py`, `growatt.py`, `entsoe.py`, `openmeteo.py`
 - `ai/claude.py` — chat backend with system-context injection
 - `safety/failsafe.py`, `safety/watchdog.py` — failsafe checks
 - Frontend: `Advanced.tsx` (port from artifact preview), `useLiveState`, `OverrideSheet`, `Settings/*`, `Learning/Activation.tsx`, routing, Tailwind setup
@@ -214,11 +216,10 @@ Work these top-to-bottom unless you discover a blocker. Each PR is its own branc
 1. **PR1 — Firestore state layer** ✅ shipped
    - `state/models.py`, `state/firestore.py`, `tests/` with in-memory fake — all helpers from `main.py` / `learning_check.py` / `push.py` resolve. ruff + mypy --strict + 15 tests pass.
    - Discrepancy uncovered: `main.py` imports `src.optimizer.v0`, `src.connectors`, `src.ai.claude` — none exist. Wiring deferred to PR5.
-2. **PR2 — HomeWizard P1 connector**
-   - Cloud API: `https://api.homewizard.com/v1/`
-   - Endpoints needed: real-time power per phase, energy totals, gas (if present)
-   - Token from env / Secret Manager
-   - Easiest connector — validates the connector pattern end-to-end
+2. **PR2 — HomeWizard P1 connector** ✅ shipped
+   - Built against the **local v1 API** — HomeWizard has no public cloud API.
+   - Local-network exposure delegated to a tunnel (Cloudflare Tunnel or Tailscale) on an always-on LAN device. Choice deferred to PR5; rationale + options in `infra/SETUP.md`.
+   - Established the connector pattern: shared `ConnectorError` hierarchy in `connectors/base.py`, async httpx client, env-driven config, MockTransport tests. PR3+ copy this shape.
 3. **PR3 — ENTSO-E prices connector**
    - Free, requires API key (request via email — Roel will arrange)
    - 24-hour day-ahead prices for NL bidding zone
