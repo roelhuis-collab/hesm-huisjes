@@ -11,7 +11,7 @@ Layer 3 (learning) lives separately in `learning.py` and feeds adjustments
 into Layer 2 — but never overrides Layer 1.
 """
 
-from dataclasses import dataclass, field, asdict
+from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from enum import Enum
 from typing import Any
@@ -127,7 +127,7 @@ class Policy:
             return self.custom_weights.normalize()
         return StrategyWeights.from_preset(self.strategy)
 
-    def to_firestore(self) -> dict:
+    def to_firestore(self) -> dict[str, Any]:
         """Serialize for Firestore write."""
         return {
             "limits": asdict(self.limits),
@@ -139,7 +139,7 @@ class Policy:
         }
 
     @classmethod
-    def from_firestore(cls, data: dict) -> "Policy":
+    def from_firestore(cls, data: dict[str, Any]) -> "Policy":
         """Reconstruct from Firestore document."""
         limits_data = data.get("limits", {})
         living = limits_data.pop("living_room", {})
