@@ -15,9 +15,8 @@ Even after activation: every learned pattern is shown in the UI, every
 suggestion is overrulable by the user. Layer 1 limits remain inviolable.
 """
 
-from dataclasses import dataclass, field, asdict
+from dataclasses import dataclass, field
 from datetime import datetime, time, timedelta
-from statistics import mean, stdev
 from typing import Any
 
 # Minimum data needed before activation can be offered to the user
@@ -101,12 +100,12 @@ def is_ready_for_activation(
         return False
     if data_quality < MIN_DATA_QUALITY:
         return False
-    if status.push_dismissed_count >= 3:
+    if status.push_dismissed_count >= 3:  # noqa: SIM102 — kept nested for the comment context
         # Wait a month after 3 dismissals before re-prompting
         if status.push_sent_at and (datetime.now() - status.push_sent_at) < timedelta(days=30):
             return False
     # Don't re-send within 7 days of last prompt
-    if status.push_sent_at and (datetime.now() - status.push_sent_at) < timedelta(days=7):
+    if status.push_sent_at and (datetime.now() - status.push_sent_at) < timedelta(days=7):  # noqa: SIM103
         return False
     return True
 
@@ -131,7 +130,7 @@ class LearningLayer:
     def active(self) -> bool:
         return self.status.is_active
 
-    def train(self, history: list[dict]) -> LearnedProfile:
+    def train(self, history: list[dict[str, Any]]) -> LearnedProfile:
         """
         Re-train the profile on recent historical data.
 
@@ -172,7 +171,7 @@ class LearningLayer:
         if not self.active:
             return {}
 
-        suggestions = {}
+        suggestions: dict[str, Any] = {}
 
         # Pre-heat hint based on learned return time
         if self.profile.daily.typical_return_time:
@@ -202,7 +201,7 @@ class LearningLayer:
 
     # --- Private extractors (stubs — full implementations after week 6) ---
 
-    def _extract_daily_pattern(self, history: list[dict]) -> DailyPattern:
+    def _extract_daily_pattern(self, history: list[dict[str, Any]]) -> DailyPattern:
         """
         Find typical wake/leave/return/sleep times from indoor activity signals.
 
@@ -213,12 +212,12 @@ class LearningLayer:
         # TODO post-activation: implement with simple histogram + peak detection
         return DailyPattern()
 
-    def _extract_weekly_pattern(self, history: list[dict]) -> WeeklyPattern:
+    def _extract_weekly_pattern(self, history: list[dict[str, Any]]) -> WeeklyPattern:
         """Differences in pattern between weekdays and weekend days."""
         # TODO post-activation
         return WeeklyPattern()
 
-    def _extract_thermal_signature(self, history: list[dict]) -> ThermalSignature:
+    def _extract_thermal_signature(self, history: list[dict[str, Any]]) -> ThermalSignature:
         """
         Linear regression of indoor-outdoor delta vs heat input over stable periods.
         Yields heat_loss_w_per_k and thermal mass estimates.
@@ -226,7 +225,7 @@ class LearningLayer:
         # TODO post-activation: numpy.linalg.lstsq on (delta_T, hp_power) → slope
         return ThermalSignature()
 
-    def _extract_forecast_bias(self, history: list[dict]) -> ForecastBias:
+    def _extract_forecast_bias(self, history: list[dict[str, Any]]) -> ForecastBias:
         """
         Compare logged Solcast forecast vs actual PV; compute multiplier.
         Same for KNMI temperature forecast vs actual.

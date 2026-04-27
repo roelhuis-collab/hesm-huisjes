@@ -181,12 +181,17 @@ Never auto-activate Layer 3. Never. The user opting in is part of the trust cont
 ## What's already built
 
 In `/apps/optimizer/src/`:
-- `optimizer/v0.py` — rule-based decision engine (smoke-tested ✓)
 - `optimizer/policy.py` — Layer 1 (SystemLimits, TempBand) + Layer 2 (Strategy, StrategyWeights) + Policy with Firestore (de)serialization
 - `optimizer/learning.py` — Layer 3 with `LearningLayer` class, `ActivationStatus`, `is_ready_for_activation()`, `LearnedProfile` and stub extractors marked TODO
 - `jobs/learning_check.py` — daily cron handler that detects readiness and triggers push
 - `notifications/push.py` — FCM helper using Firebase Admin SDK (web push + APNS configured)
-- `main.py` — FastAPI app with all endpoints scaffolded; uses placeholder `CLOUD_SCHEDULER_TOKEN` (replace with OIDC), mocks `_gather_state()` and `_apply_plan()`
+- `state/models.py` — Pydantic DTOs for `SystemState`, `Decision`, `FCMToken`, plus persistence mirrors of `ActivationStatus` / `LearnedProfile` (PR1)
+- `state/firestore.py` — Firestore data layer with all collection helpers used by `main.py`, `learning_check.py`, `push.py` (PR1)
+- `main.py` — FastAPI app with all endpoints scaffolded; uses placeholder `CLOUD_SCHEDULER_TOKEN` (replace with OIDC), mocks `_gather_state()` and `_apply_plan()`. Imports `src.connectors.*`, `src.optimizer.v0`, `src.ai.claude` which **do not exist yet** — service won't start until PR2/3/4/5 land. Ship `main.py` wiring in PR5.
+
+In `/apps/optimizer/`:
+- `pyproject.toml` — uv-managed deps + ruff + mypy strict + pytest config (PR1)
+- `tests/` — pytest suite with in-memory `FakeFirestore` fake, 15 tests covering policy / activation / state snapshots / decisions / FCM tokens / learned profile (PR1)
 
 In `/apps/dashboard/`:
 - `src/pages/Simple.tsx` — iPad-default page with current-action sentence, today/month savings, big override button. Imports `useLiveState` and `OverrideSheet` (not yet built — see PR8/9)
@@ -196,7 +201,6 @@ In root:
 - `README.md` — public-facing project overview
 
 **Not yet built (needs you):**
-- `state/firestore.py`, `state/models.py` — Firestore data layer
 - `connectors/` — `weheat.py`, `resideo.py`, `shelly.py`, `growatt.py`, `homewizard.py`, `entsoe.py`, `openmeteo.py`
 - `ai/claude.py` — chat backend with system-context injection
 - `safety/failsafe.py`, `safety/watchdog.py` — failsafe checks
@@ -207,12 +211,9 @@ In root:
 
 Work these top-to-bottom unless you discover a blocker. Each PR is its own branch, opened against `main`, ~50-250 lines, with tests where applicable.
 
-1. **PR1 — Firestore state layer** ← start here
-   - `state/models.py`: Pydantic models for SystemState, Decision, ActivationStatus, LearnedProfile, FCMToken
-   - `state/firestore.py`: collection helpers (`get_policy`, `save_policy`, `save_state_snapshot`, `save_decision`, `count_state_samples`, `get_data_start_date`, `get_user_fcm_tokens`, `mark_fcm_token_invalid`, etc.)
-   - Use Firebase Admin SDK; assume credentials from WIF in production, ADC locally
-   - Decision: store quarter-hourly snapshots indefinitely (Firestore is cheap at this scale; revisit if cost > €5/month after 6 months — leave a TODO comment)
-   - Tests: in-memory mock or Firestore emulator
+1. **PR1 — Firestore state layer** ✅ shipped
+   - `state/models.py`, `state/firestore.py`, `tests/` with in-memory fake — all helpers from `main.py` / `learning_check.py` / `push.py` resolve. ruff + mypy --strict + 15 tests pass.
+   - Discrepancy uncovered: `main.py` imports `src.optimizer.v0`, `src.connectors`, `src.ai.claude` — none exist. Wiring deferred to PR5.
 2. **PR2 — HomeWizard P1 connector**
    - Cloud API: `https://api.homewizard.com/v1/`
    - Endpoints needed: real-time power per phase, energy totals, gas (if present)
