@@ -1,0 +1,44 @@
+// HESM by Huisjes — Firestore security rules.
+//
+// Default deny everything. Two paths to access:
+//
+//   1. The Cloud Run runtime SA (hesm-optimizer@...) reads/writes via the
+//      Firebase Admin SDK. Admin SDK bypasses these rules entirely (it
+//      authenticates with IAM, not Firebase Auth). So the rules below
+//      don't need to allow it explicitly.
+//
+//   2. Authenticated end-users (Roel + future partner) get read access to
+//      everything from the dashboard. Writes from the client are blocked
+//      — the dashboard always goes through the Cloud Run service for
+//      writes (policy updates, override). This keeps Layer 1 enforcement
+//      server-side where it belongs.
+//
+// FCM token registration is the one exception: the dashboard writes its
+// own token directly to /fcm_tokens/{token} so the user can register
+// without round-tripping through Cloud Run.
+
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Read access for any signed-in user. Tighten with a UID allow-list
+    // once the partner account is added (PR11).
+    match /{document=**} {
+      allow read: if request.auth != null;
+      allow write: if false;
+    }
+
+    // FCM tokens — clients can upsert their own, identified by token id.
+    match /fcm_tokens/{token} {
+      allow read: if request.auth != null;
+      allow create, update: if request.auth != null
+        && request.resource.data.token == token
+        && request.resource.data.keys().hasOnly([
+             'token', 'platform', 'user_id', 'label', 'valid',
+             'created_at', 'last_used_at'
+           ]);
+      allow delete: if false;  // soft-delete via the Cloud Run service
+    }
+  }
+}

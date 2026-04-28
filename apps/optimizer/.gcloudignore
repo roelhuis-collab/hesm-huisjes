@@ -1,0 +1,28 @@
+.gcloudignore
+.git/
+.gitignore
+
+# Python build artifacts
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Tests are not deployed
+tests/
+
+# Editor / OS
+.DS_Store
+.vscode/
+.idea/
+
+# Secrets — never include
+.env
+.env.*
+*.key
+*.pem
+service-account*.json
