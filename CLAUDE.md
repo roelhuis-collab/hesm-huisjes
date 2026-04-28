@@ -261,8 +261,8 @@ Work these top-to-bottom unless you discover a blocker. Each PR is its own branc
     - 13 new tests (87 total) using a fake AsyncAnthropic client; mypy strict + ruff clean.
 11. **PR11 — Frontend essentials** (split into 11a/b/c)
     - **PR11a — foundation** ✅ shipped. Vite + React 18 + TS + Tailwind + React Router + Firebase web SDK. Auth context with Google popup sign-in. `useLiveState` hook subscribing to Firestore in realtime. `OverrideSheet` bottom-sheet posting to Cloud Run `/override`. Sign-in page + `RequireAuth` guard. `netlify.toml` with SPA rewrites + security headers.
-    - **PR11b — Advanced + Settings pages** (next).
-    - **PR11c — PWA shell + service worker** (after 11b).
+    - **PR11b — Settings pages** ✅ shipped. Four settings pages (Limits / Strategy / Learning / Connectors) editing Layer 1+2 policy, showing Layer-3 activation progress, and rendering the `/health` wiring map. Typed API client (`src/lib/api.ts`) for `/policy`, `/learning/respond`, `/health`. Placeholder `Advanced.tsx` so the "details" link from Simple isn't broken — full Advanced view comes in 11c.
+    - **PR11c — Advanced page (charts + AI chat panel) + PWA shell + service worker** (next).
 
 After all three, the system is deployable end-to-end. Then we replace mocks with real connectors when hardware lands (~late Q2 2026).
 
