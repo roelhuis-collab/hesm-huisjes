@@ -1,0 +1,26 @@
+# Netlify deploy config — PR11a.
+#
+# The dashboard is the only deployed thing on Netlify; the optimizer
+# runs on Cloud Run. We point Netlify at apps/dashboard only.
+
+[build]
+  base    = "apps/dashboard"
+  command = "npm run build"
+  publish = "dist"
+
+# All routes are client-side rendered by React Router. Netlify needs to
+# rewrite every request that isn't a static asset back to index.html so
+# deep links (/, /signin, /advanced, etc.) load the SPA.
+[[redirects]]
+  from   = "/*"
+  to     = "/index.html"
+  status = 200
+
+# Strict security defaults — overridden per-asset where needed.
+[[headers]]
+  for = "/*"
+  [headers.values]
+    X-Frame-Options        = "DENY"
+    X-Content-Type-Options = "nosniff"
+    Referrer-Policy        = "strict-origin-when-cross-origin"
+    Permissions-Policy     = "camera=(), microphone=(), geolocation=()"
