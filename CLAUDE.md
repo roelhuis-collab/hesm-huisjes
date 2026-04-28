@@ -262,7 +262,8 @@ Work these top-to-bottom unless you discover a blocker. Each PR is its own branc
 11. **PR11 — Frontend essentials** (split into 11a/b/c)
     - **PR11a — foundation** ✅ shipped. Vite + React 18 + TS + Tailwind + React Router + Firebase web SDK. Auth context with Google popup sign-in. `useLiveState` hook subscribing to Firestore in realtime. `OverrideSheet` bottom-sheet posting to Cloud Run `/override`. Sign-in page + `RequireAuth` guard. `netlify.toml` with SPA rewrites + security headers.
     - **PR11b — Settings pages** ✅ shipped. Four settings pages (Limits / Strategy / Learning / Connectors) editing Layer 1+2 policy, showing Layer-3 activation progress, and rendering the `/health` wiring map. Typed API client (`src/lib/api.ts`) for `/policy`, `/learning/respond`, `/health`. Placeholder `Advanced.tsx` so the "details" link from Simple isn't broken — full Advanced view comes in 11c.
-    - **PR11c — Advanced page (charts + AI chat panel) + PWA shell + service worker** (next).
+    - **PR11c — Advanced page** ✅ shipped. Live state panel, Open-Meteo 48h temp+cloud chart (Recharts), 24h decisions timeline (Firestore subscription), SSE streaming AI chat panel. EPEX price chart is a placeholder until ENTSO-E API token lands. Recharts + date-fns added; bundle now ~1 MB JS — code-splitting in 11d.
+    - **PR11d — PWA shell + service worker + bundle code-split** (next).
 
 After all three, the system is deployable end-to-end. Then we replace mocks with real connectors when hardware lands (~late Q2 2026).
 
