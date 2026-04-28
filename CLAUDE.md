@@ -191,7 +191,7 @@ In `/apps/optimizer/src/`:
 - `connectors/homewizard.py` — async HomeWizard P1 client against the **local v1 API** (`/api`, `/api/v1/data`). Reads `HOMEWIZARD_BASE_URL` + optional `HOMEWIZARD_HEADER_*` env vars. Tunnel choice deferred to PR5 — see `infra/SETUP.md` (PR2)
 - `connectors/entsoe.py` — async ENTSO-E Transparency Platform client. `get_day_ahead_prices(date)` returns 24 (or 23/25 on DST) `HourlyPrice` rows with raw spot €/MWh and **VAT-inclusive** all-in EUR/kWh: `((spot/1000) + 0.1108 + 0.025) * 1.21`. Matches Tibber/Frank/EnergyZero retail quoting. Uses `defusedxml` for safe XML parsing. Reads `ENTSOE_API_TOKEN` from env / Secret Manager (PR3)
 - `connectors/openmeteo.py` — async Open-Meteo client (no auth) returning hourly temp + cloud cover for Sittard, with a crude PV estimate (sine elevation × cloud factor). Defaults to 50.99°N/5.87°E; overridable via `OPENMETEO_LATITUDE`/`OPENMETEO_LONGITUDE`/`OPENMETEO_BASE_URL`. Solcast replaces the PV model post-launch (PR4)
-- `main.py` — FastAPI app with all endpoints scaffolded; uses placeholder `CLOUD_SCHEDULER_TOKEN` (replace with OIDC), mocks `_gather_state()` and `_apply_plan()`. Imports `src.connectors.*`, `src.optimizer.v0`, `src.ai.claude` which **do not exist yet** — service won't start until PR2/3/4/5 land. Ship `main.py` wiring in PR5.
+- `main.py` — production FastAPI app, **deployed on Cloud Run**. `/health` (public), `/policy` (CRUD), `/learning/respond`, `/override`, `/jobs/learning-check`, `/optimize` (returns 503 until PR6-9 land their connectors). OIDC-token verification for scheduler endpoints via `SCHEDULER_ALLOWED_EMAILS`; Firebase ID token check for user endpoints lands in PR11. Sentry SDK initialised at startup if `SENTRY_DSN` is set (PR5)
 
 In `/apps/optimizer/`:
 - `pyproject.toml` — uv-managed deps + ruff + mypy strict + pytest config (PR1)
@@ -229,14 +229,16 @@ Work these top-to-bottom unless you discover a blocker. Each PR is its own branc
 4. **PR4 — Open-Meteo weather connector** ✅ shipped
    - `connectors/openmeteo.py` + 21 MockTransport tests. Hourly temp + cloud cover for Sittard, parsed into UTC `HourlyForecast` rows with a crude PV estimate. Solcast replaces the PV model post-launch.
    - Sittard coordinates corrected: **50.99°N**, 5.87°E (the earlier 51.99 was a typo — that latitude lies near Eindhoven).
-5. **PR5 — Cloud Run + WIF skeleton deploy**
-   - `Dockerfile`, `pyproject.toml`, `cloudbuild.yaml`
-   - WIF bindings: Cloud Run SA → Firebase, Secret Manager, Cloud Scheduler invoker
-   - Cloud Scheduler jobs: 15-min `/optimize`, daily 19:00 `/jobs/learning-check`
-   - Replace `CLOUD_SCHEDULER_TOKEN` check with OIDC token verification
-   - Health probe at `/health`
-   - Sentry integration for errors (free tier)
-   - Document the GCP project setup steps in `infra/SETUP.md`
+5. **PR5 — Cloud Run skeleton deploy** ✅ shipped
+   - **Live**: https://hesm-optimizer-4rsk5dywaa-ez.a.run.app/health
+   - Multi-stage Dockerfile + `cloudbuild.yaml` (manual `gcloud builds submit` for now; GitHub trigger documented in `infra/SETUP.md`).
+   - Two service accounts: `hesm-optimizer` runtime SA (Firestore, secrets, FCM, logs/metrics/trace) and `hesm-scheduler` invoker SA. Project-level minimum-privilege IAM bindings.
+   - Cloud Scheduler jobs: `*/15 * * * *` POST `/optimize`, `0 19 * * *` POST `/jobs/learning-check`, both with OIDC tokens whose email is verified against `SCHEDULER_ALLOWED_EMAILS` in `main.py`.
+   - Secret Manager: `anthropic-api-key` and `sentry-dsn` mounted via `--set-secrets`.
+   - Firestore in `europe-west4` Native mode + `firestore.rules` deployed via Firebase CLI.
+   - Sentry SDK init at startup; `SENTRY_DSN` blank in dev silently skips it.
+   - `/health` public; `/policy` + `/learning/respond` + `/override` work end-to-end; `/optimize` returns 503 with explicit message until PR6-9 wire device connectors. End-to-end smoke verified: scheduler-triggered `/jobs/learning-check` initialised `data_start` in Firestore.
+   - Full runbook in `infra/SETUP.md` (deploy, rollback, log access, secret rotation, missing tunnel/ENTSO-E token notes).
 6. **PR6 — WeHeat connector**
    - OAuth2 client credentials flow
    - Endpoints: status (temps, COP, power), setpoint update for boiler
