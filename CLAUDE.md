@@ -209,7 +209,7 @@ In root:
 - `connectors/` — `weheat.py`, `resideo.py`, `shelly.py`, `growatt.py`
 - `ai/claude.py` — chat backend with system-context injection
 - `safety/failsafe.py`, `safety/watchdog.py` — failsafe checks
-- Frontend: `Advanced.tsx` (port from artifact preview), `useLiveState`, `OverrideSheet`, `Settings/*`, `Learning/Activation.tsx`, routing, Tailwind setup
+- Frontend: `Advanced.tsx` (port from artifact preview), `Settings/*`, `Learning/Activation.tsx` — PR11b/c
 - Infra: `Dockerfile`, `pyproject.toml`, `cloudbuild.yaml`, `firestore.rules`, WIF bindings, Cloud Scheduler jobs
 
 ## Roadmap (PR sequence)
@@ -259,16 +259,12 @@ Work these top-to-bottom unless you discover a blocker. Each PR is its own branc
     - Default `claude-sonnet-4-6` (Sonnet 4.7 doesn't exist — corrected from CLAUDE.md). Override via `HESM_CHAT_MODEL` env.
     - `/chat` endpoint live at the Cloud Run URL; verified with real Anthropic API call.
     - 13 new tests (87 total) using a fake AsyncAnthropic client; mypy strict + ruff clean.
-11. **PR11 — Frontend essentials**
-    - Tailwind setup, routing (`react-router-dom`)
-    - `useLiveState` hook (Firestore realtime subscription)
-    - `OverrideSheet` component (the bottom sheet from Simple)
-    - Convert `HesmDashboard.jsx` artifact preview into production `Advanced.tsx`
-    - `Settings/*` pages: Limits, Strategy, Learning activation, Connectors status
-    - PWA install prompts, service worker for offline read
-    - Firebase Auth integration with Google sign-in (Roel + partner)
+11. **PR11 — Frontend essentials** (split into 11a/b/c)
+    - **PR11a — foundation** ✅ shipped. Vite + React 18 + TS + Tailwind + React Router + Firebase web SDK. Auth context with Google popup sign-in. `useLiveState` hook subscribing to Firestore in realtime. `OverrideSheet` bottom-sheet posting to Cloud Run `/override`. Sign-in page + `RequireAuth` guard. `netlify.toml` with SPA rewrites + security headers.
+    - **PR11b — Advanced + Settings pages** (next).
+    - **PR11c — PWA shell + service worker** (after 11b).
 
-After PR11, the system should be deployable end-to-end with mock state. Then we replace mocks with real connectors when hardware lands (~late Q2 2026).
+After all three, the system is deployable end-to-end. Then we replace mocks with real connectors when hardware lands (~late Q2 2026).
 
 ## External APIs & credentials
 
