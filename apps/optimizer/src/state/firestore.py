@@ -38,7 +38,7 @@ login``) work the same way.
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Any
 
 from src.optimizer.learning import ActivationStatus, LearnedProfile
@@ -171,6 +171,30 @@ def count_state_samples(since: datetime) -> int:
         if isinstance(agg, int):
             return agg
     return sum(1 for _ in coll.stream())
+
+
+def get_recent_state_snapshot() -> SystemState | None:
+    """Return the most-recent ``SystemState``, or ``None`` if none exist.
+
+    Bounded to the last hour of data — Cloud Scheduler runs every 15 min so
+    there are at most ~4 candidates and we don't scan the full collection.
+    """
+    cutoff = (datetime.now() - timedelta(hours=1)).isoformat()
+    coll = _db().collection(STATE_SNAPSHOTS_COLLECTION).where("timestamp", ">=", cutoff)
+    docs = [d.to_dict() or {} for d in coll.stream()]
+    if not docs:
+        return None
+    docs.sort(key=lambda d: str(d.get("timestamp", "")), reverse=True)
+    return SystemState.model_validate(docs[0])
+
+
+def get_recent_decisions(hours: int = 24) -> list[Decision]:
+    """Return decisions from the last N hours, most-recent first."""
+    cutoff = (datetime.now() - timedelta(hours=hours)).isoformat()
+    coll = _db().collection(DECISIONS_COLLECTION).where("timestamp", ">=", cutoff)
+    docs = [d.to_dict() or {} for d in coll.stream()]
+    docs.sort(key=lambda d: str(d.get("timestamp", "")), reverse=True)
+    return [Decision.model_validate(d) for d in docs]
 
 
 def get_data_start_date() -> datetime | None:
