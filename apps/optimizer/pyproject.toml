@@ -43,6 +43,7 @@ src = ["src", "tests"]
 select = ["E", "F", "I", "B", "UP", "N", "SIM", "RUF"]
 ignore = [
     "E501",   # line length (handled by formatter)
+    "RUF001", # string literals use em/en dashes for typography
     "RUF002", # docstrings use em/en dashes intentionally throughout
     "RUF003", # comments use em/en dashes intentionally throughout
     "N818",   # exception names like ConnectorUnavailable read better
@@ -61,6 +62,7 @@ disallow_any_generics = true
 # Scope expands per PR. PR1 introduces the state layer; subsequent PRs
 # (connectors, AI, full main.py wiring) widen this list as they land.
 files = [
+    "src/ai",
     "src/connectors",
     "src/state",
     "src/optimizer/policy.py",

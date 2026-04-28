@@ -191,7 +191,8 @@ In `/apps/optimizer/src/`:
 - `connectors/homewizard.py` — async HomeWizard P1 client against the **local v1 API** (`/api`, `/api/v1/data`). Reads `HOMEWIZARD_BASE_URL` + optional `HOMEWIZARD_HEADER_*` env vars. Tunnel choice deferred to PR5 — see `infra/SETUP.md` (PR2)
 - `connectors/entsoe.py` — async ENTSO-E Transparency Platform client. `get_day_ahead_prices(date)` returns 24 (or 23/25 on DST) `HourlyPrice` rows with raw spot €/MWh and **VAT-inclusive** all-in EUR/kWh: `((spot/1000) + 0.1108 + 0.025) * 1.21`. Matches Tibber/Frank/EnergyZero retail quoting. Uses `defusedxml` for safe XML parsing. Reads `ENTSOE_API_TOKEN` from env / Secret Manager (PR3)
 - `connectors/openmeteo.py` — async Open-Meteo client (no auth) returning hourly temp + cloud cover for Sittard, with a crude PV estimate (sine elevation × cloud factor). Defaults to 50.99°N/5.87°E; overridable via `OPENMETEO_LATITUDE`/`OPENMETEO_LONGITUDE`/`OPENMETEO_BASE_URL`. Solcast replaces the PV model post-launch (PR4)
-- `main.py` — production FastAPI app, **deployed on Cloud Run**. `/health` (public), `/policy` (CRUD), `/learning/respond`, `/override`, `/jobs/learning-check`, `/optimize` (returns 503 until PR6-9 land their connectors). OIDC-token verification for scheduler endpoints via `SCHEDULER_ALLOWED_EMAILS`; Firebase ID token check for user endpoints lands in PR11. Sentry SDK initialised at startup if `SENTRY_DSN` is set (PR5)
+- `main.py` — production FastAPI app, **deployed on Cloud Run**. `/health` (public), `/policy` (CRUD), `/learning/respond`, `/override`, `/jobs/learning-check`, `/chat` (streaming SSE — Claude Sonnet 4.6), `/optimize` (returns 503 until PR6-9 land their connectors). OIDC-token verification for scheduler endpoints via `SCHEDULER_ALLOWED_EMAILS`; Firebase ID token check for user endpoints lands in PR11. Sentry SDK initialised at startup if `SENTRY_DSN` is set (PR5, extended PR10)
+- `ai/claude.py` — Anthropic-backed conversational layer. `answer_with_context(messages)` streams Server-Sent Events. System prompt composed from live Firestore state (persona + house spec + Layer 1/2 policy + most-recent SystemState + last 24 h of decisions) with one `cache_control: {"type": "ephemeral"}` breakpoint — within a 15-min cycle the prompt is byte-stable and follow-up questions read the cache at ~10% cost. Default model `claude-sonnet-4-6`, overridable via `HESM_CHAT_MODEL` (PR10)
 
 In `/apps/optimizer/`:
 - `pyproject.toml` — uv-managed deps + ruff + mypy strict + pytest config (PR1)
@@ -253,10 +254,11 @@ Work these top-to-bottom unless you discover a blocker. Each PR is its own branc
 9. **PR9 — Growatt connector (cloud first)**
    - ShineWiFi-X cloud poll for PV production, per-phase power
    - Local Modbus TCP via Waveshare gateway as future option (own PR later)
-10. **PR10 — Claude AI chat backend**
-    - `ai/claude.py` with `answer_with_context(messages)` that builds system prompt from current state, recent decisions, policy
-    - Use `claude-sonnet-4-5-20250929` or whatever's current; check Anthropic docs
-    - Stream responses via SSE for snappy UX
+10. **PR10 — Claude AI chat backend** ✅ shipped
+    - `src/ai/claude.py` with async `answer_with_context(messages)` streaming Server-Sent Events. System prompt rebuilt per request from Firestore (persona + house spec + Layer 1/2 + last SystemState + 24 h of decisions); one `cache_control` breakpoint at the system block.
+    - Default `claude-sonnet-4-6` (Sonnet 4.7 doesn't exist — corrected from CLAUDE.md). Override via `HESM_CHAT_MODEL` env.
+    - `/chat` endpoint live at the Cloud Run URL; verified with real Anthropic API call.
+    - 13 new tests (87 total) using a fake AsyncAnthropic client; mypy strict + ruff clean.
 11. **PR11 — Frontend essentials**
     - Tailwind setup, routing (`react-router-dom`)
     - `useLiveState` hook (Firestore realtime subscription)

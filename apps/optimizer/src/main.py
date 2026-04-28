@@ -41,7 +41,8 @@ from contextlib import asynccontextmanager
 from typing import Any, Literal
 
 import firebase_admin
-from fastapi import FastAPI, Header, HTTPException, Request
+from fastapi import FastAPI, Header, HTTPException
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from src.jobs.learning_check import handle_activation_response, run_daily_check
@@ -157,7 +158,7 @@ async def health() -> dict[str, Any]:
             "resideo_connector": False,      # PR7
             "shelly_connector": False,       # PR8
             "growatt_connector": False,      # PR9
-            "ai_chat": False,                # PR10
+            "ai_chat": True,                 # PR10
             "optimizer_v0": False,           # arrives with PR5 wiring or later
         },
     }
@@ -198,14 +199,29 @@ async def learning_check(authorization: str | None = Header(default=None)) -> di
 
 
 class ChatRequest(BaseModel):
-    messages: list[dict[str, str]]
+    messages: list[dict[str, Any]]
 
 
 @app.post("/chat")
-async def chat(req: ChatRequest, request: Request) -> dict[str, Any]:
-    raise HTTPException(
-        status_code=503,
-        detail="/chat lands in PR10 — Anthropic key is already in Secret Manager.",
+async def chat(req: ChatRequest) -> StreamingResponse:
+    """Stream a Claude-backed reply as Server-Sent Events.
+
+    Body: ``{"messages": [{"role": "user"|"assistant", "content": "..."}]}``
+    Response: ``text/event-stream`` with ``data: {...}`` frames carrying
+    incremental text deltas, terminated by ``{"type": "done"}``.
+    """
+    from src.ai.claude import answer_with_context
+
+    if not req.messages:
+        raise HTTPException(status_code=400, detail="messages must not be empty")
+
+    return StreamingResponse(
+        answer_with_context(req.messages),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache, no-transform",
+            "X-Accel-Buffering": "no",
+        },
     )
 
 
