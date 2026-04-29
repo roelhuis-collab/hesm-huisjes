@@ -149,17 +149,18 @@ async def health() -> dict[str, Any]:
         "status": "ok",
         "service": "hesm-optimizer",
         "wiring": {
-            # Honest about what's actually wired to real things.
+            # Connector flags reflect whether *something* is wired (real or
+            # mock); the real-vs-mock split is exposed in /health.connectors.
             "firestore": True,
             "homewizard_connector": True,
             "entsoe_connector": True,
             "openmeteo_connector": True,
-            "weheat_connector": False,       # PR6
-            "resideo_connector": False,      # PR7
-            "shelly_connector": False,       # PR8
-            "growatt_connector": False,      # PR9
+            "weheat_connector": True,        # PR12 (mock until creds arrive)
+            "resideo_connector": True,       # PR12 (mock until creds arrive)
+            "shelly_connector": True,        # PR12 (mock until creds arrive)
+            "growatt_connector": True,       # PR12 (mock until creds arrive)
             "ai_chat": True,                 # PR10
-            "optimizer_v0": False,           # arrives with PR5 wiring or later
+            "optimizer_v0": True,            # PR13
         },
     }
 
@@ -171,15 +172,22 @@ async def health() -> dict[str, Any]:
 
 @app.post("/optimize")
 async def optimize(authorization: str | None = Header(default=None)) -> dict[str, Any]:
-    """Run one 15-min optimization cycle. Triggered by Cloud Scheduler."""
+    """Run one 15-min optimization cycle. Triggered by Cloud Scheduler.
+
+    Pipeline:
+      1. Read policy + activation status from Firestore.
+      2. Gather state from every device + data connector in parallel.
+      3. Compute the plan via ``optimizer.v0.plan_next_quarter``.
+      4. Apply the plan to devices (clamped to Layer-1 limits).
+      5. Persist a state snapshot + decision to Firestore.
+    """
     verify_scheduler_token(authorization)
-    raise HTTPException(
-        status_code=503,
-        detail=(
-            "/optimize is not yet wired: optimizer.v0 + WeHeat/Resideo/Shelly/Growatt "
-            "connectors land in PR6-9. Cloud Scheduler will continue retrying — that's fine."
-        ),
-    )
+
+    from src.optimizer.cycle import run_cycle
+
+    plan = await run_cycle()
+    log.info("optimize: %s — %s", plan.tag, plan.reason)
+    return {"status": "ok", "tag": plan.tag, "reason": plan.reason}
 
 
 # ---------------------------------------------------------------------------

@@ -65,8 +65,7 @@ files = [
     "src/ai",
     "src/connectors",
     "src/state",
-    "src/optimizer/policy.py",
-    "src/optimizer/learning.py",
+    "src/optimizer",
     "src/main.py",
     "tests",
 ]
