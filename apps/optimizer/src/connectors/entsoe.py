@@ -342,3 +342,68 @@ def _parse_day_ahead_prices(body: bytes) -> list[HourlyPrice]:
 
     out.sort(key=lambda p: p.timestamp_utc)
     return out
+
+
+# ---------------------------------------------------------------------------
+# Mock + factory — used when no ENTSOE_API_TOKEN is set.
+# ---------------------------------------------------------------------------
+
+# Realistic NL day-ahead pattern: low at night, peak 18-20h. Wholesale €/MWh.
+_DAILY_SHAPE_EUR_MWH = [
+    35, 30, 28, 27, 28, 32, 45, 65, 85, 75, 60, 50,   # 00..11
+    45, 42, 40, 45, 60, 90, 120, 110, 80, 65, 55, 45,  # 12..23
+]
+
+
+class MockEntsoeClient:
+    """Synthetic day-ahead prices following a typical NL daily curve.
+
+    Returns 24 ``HourlyPrice`` rows for the requested local day. Used when
+    no ENTSO-E API token is in the env so the optimizer cycle and the
+    dashboard chart still have data to work with.
+    """
+
+    async def get_day_ahead_prices(self, date_local: date) -> list[HourlyPrice]:
+        # Day in question runs from local midnight to local midnight; treat
+        # local==UTC for the mock (Roel is UTC+1/+2; close enough for fakes).
+        from datetime import datetime as _dt
+        from datetime import timedelta as _td
+
+        start = _dt(date_local.year, date_local.month, date_local.day, tzinfo=UTC)
+        out: list[HourlyPrice] = []
+        for hour, spot_eur_mwh in enumerate(_DAILY_SHAPE_EUR_MWH):
+            ts = start + _td(hours=hour)
+            subtotal = (
+                (spot_eur_mwh / 1000.0) + ENERGY_TAX_EUR_KWH + SUPPLIER_MARKUP_EUR_KWH
+            )
+            all_in = subtotal * (1 + VAT_RATE)
+            out.append(
+                HourlyPrice(
+                    timestamp_utc=ts,
+                    spot_eur_mwh=float(spot_eur_mwh),
+                    all_in_eur_kwh=all_in,
+                )
+            )
+        return out
+
+    async def __aenter__(self) -> MockEntsoeClient:
+        return self
+
+    async def __aexit__(self, *args: object) -> None:
+        return None
+
+
+def entsoe_client() -> EntsoeClient | MockEntsoeClient:
+    """Return a real client when the token is set, mock otherwise.
+
+    Both implementations share ``get_day_ahead_prices(date)``; callers
+    don't need to branch.
+    """
+    token = os.environ.get("ENTSOE_API_TOKEN", "").strip()
+    if token:
+        return EntsoeClient(api_token=token)
+    return MockEntsoeClient()
+
+
+def is_using_mock_entsoe() -> bool:
+    return not os.environ.get("ENTSOE_API_TOKEN", "").strip()
