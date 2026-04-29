@@ -7,9 +7,9 @@ Tokens are written by the dashboard when it gets push permission.
 
 import logging
 import os
-from typing import Any
 
 from firebase_admin import messaging
+
 from src.state.firestore import get_user_fcm_tokens, mark_fcm_token_invalid
 
 log = logging.getLogger(__name__)

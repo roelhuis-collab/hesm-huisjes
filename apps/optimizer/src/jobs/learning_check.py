@@ -9,20 +9,18 @@ This is the ONLY way Layer 3 ever gets activated — never automatically.
 """
 
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime
 
+from src.notifications.push import send_push
 from src.optimizer.learning import (
-    ActivationStatus,
-    is_ready_for_activation,
     MIN_DATA_DAYS,
     MIN_DATA_QUALITY,
+    is_ready_for_activation,
 )
-from src.notifications.push import send_push
 from src.state.firestore import (
+    count_state_samples,
     get_activation_status,
     update_activation_status,
-    count_state_samples,
-    get_data_start_date,
 )
 
 log = logging.getLogger(__name__)
