@@ -35,11 +35,11 @@ The repo already has a scaffold (see "What's already built"). Your job is to ext
 
 | Component | Model / spec | Integration path |
 |---|---|---|
-| Heat pump | WeHeat Blackbird P80 (8 kW thermal, R290) | WeHeat cloud API (OAuth) |
-| Indoor unit | WeHeat Compact All-Electric | via WeHeat |
+| Heat pump | WeHeat Blackbird P80 (8 kW thermal, R290) | WeHeat cloud API (OAuth, **read-only telemetry**) |
+| Indoor unit | WeHeat Compact All-Electric | via WeHeat (read-only) |
 | DHW boiler | Inventum MAXtank 500L RVS | passive — temperature read via WeHeat |
 | Buffer tank | WeHeat 100L Duplex RVS 2205 | passive |
-| Immersion heater | 3 kW (in boiler tank) | Shelly Pro 2PM contactor |
+| Immersion heater | 3 kW (in boiler tank) | Shelly Pro 2PM contactor (**only DHW lever we control**) |
 | Thermostat | Honeywell Lyric T6 wired (Y6H810WF1005) | Resideo Total Connect Comfort API |
 | PV inverter | Growatt MOD 9000TL3-X (9 kW 3-phase) | Cloud poll + future local Modbus |
 | Solar | 26 panels, ~11.000 kWh/year | via Growatt |
@@ -58,7 +58,7 @@ The repo already has a scaffold (see "What's already built"). Your job is to ext
 2. **Failsafe by default.** If the optimizer service is down, devices fall back to their factory defaults. Roel's house must never become uncomfortable because of our software. Aggressive watchdog with FCM alert if anything stops responding.
 3. **Transparent decisions, always.** Every optimizer action has a `rationale` string. The dashboard shows it. The AI chat can explain it on request. No black-box "trust me".
 4. **User overrules everything.** Manual override is one tap away on the iPad. AI suggestions must always be skippable. Layer 1 limits are the *only* thing the user can't override (those are physical safety).
-5. **Don't fight the device.** WeHeat, Honeywell, Shelly, Growatt all have their own internal logic. Our role is to send setpoints and on/off commands within their normal API surface. We never spoof state, never bypass their safety. If they reject a command, we accept it and log.
+5. **Don't fight the device.** Honeywell, Shelly, Growatt have their own internal logic. Our role is to send setpoints and on/off commands within their normal API surface. We never spoof state, never bypass their safety. If they reject a command, we accept it and log. **WeHeat is read-only** — its public third_party API offers no write endpoints, so the heat pump runs on its own schedule and we observe.
 6. **Cloud-only, no edge.** Roel rejected the edge mini-PC option. All control happens via device clouds. We accept the latency (200-500ms is fine for 15-min cycles) and the dependency on third-party APIs.
 7. **AI is explainable and incremental.** Layer 3 (learning) is dormant for the first 42 days. After that, the user opts in via push notification. Even after activation, suggestions are soft inputs, never overrides.
 8. **Default = simplicity, depth on demand.** The Simple page is what Roel sees daily on the iPad. The Advanced dashboard is for when he wants to dig in. Don't blur this.
@@ -191,7 +191,8 @@ In `/apps/optimizer/src/`:
 - `connectors/homewizard.py` — async HomeWizard P1 client against the **local v1 API** (`/api`, `/api/v1/data`). Reads `HOMEWIZARD_BASE_URL` + optional `HOMEWIZARD_HEADER_*` env vars. Tunnel choice deferred to PR5 — see `infra/SETUP.md` (PR2)
 - `connectors/entsoe.py` — async ENTSO-E Transparency Platform client. `get_day_ahead_prices(date)` returns 24 (or 23/25 on DST) `HourlyPrice` rows with raw spot €/MWh and **VAT-inclusive** all-in EUR/kWh: `((spot/1000) + 0.1108 + 0.025) * 1.21`. Matches Tibber/Frank/EnergyZero retail quoting. Uses `defusedxml` for safe XML parsing. Reads `ENTSOE_API_TOKEN` from env / Secret Manager (PR3)
 - `connectors/openmeteo.py` — async Open-Meteo client (no auth) returning hourly temp + cloud cover for Sittard, with a crude PV estimate (sine elevation × cloud factor). Defaults to 50.99°N/5.87°E; overridable via `OPENMETEO_LATITUDE`/`OPENMETEO_LONGITUDE`/`OPENMETEO_BASE_URL`. Solcast replaces the PV model post-launch (PR4)
-- `connectors/weheat.py` / `resideo.py` / `shelly.py` / `growatt.py` — each exposes a real-cloud client class **and** a `MockXxxClient` returning coherent synthetic data, picked by an `xxx_client()` factory based on whether vendor creds are set in env. Real clients are sealed with `NotImplementedError` pending vendor access; mocks let the optimizer cycle run end-to-end on staging. ENTSO-E gained the same fallback (`entsoe_client()`) — no token → mock 24h prices via a typical NL daily curve (PR12)
+- `connectors/weheat.py` — **read-only** WeHeat third_party API client. OAuth2 authorization_code + PKCE bootstrap (one-time `scripts/weheat_bootstrap.py`) yields a refresh token in Secret Manager (`weheat-refresh-token`); `_RealWeHeatClient` exchanges it for an access token on demand and queries the `weheat==2026.4.8` SDK (`HeatPumpDiscovery`, `HeatPump.async_get_logs`). `MockWeHeatClient` returns coherent synthetic data when the refresh token is absent. No write paths exist on the public API (PR6).
+- `connectors/resideo.py` / `shelly.py` / `growatt.py` — each exposes a real-cloud client class **and** a `MockXxxClient` returning coherent synthetic data, picked by an `xxx_client()` factory based on whether vendor creds are set in env. Real clients are sealed with `NotImplementedError` pending vendor access; mocks let the optimizer cycle run end-to-end on staging. ENTSO-E gained the same fallback (`entsoe_client()`) — no token → mock 24h prices via a typical NL daily curve (PR12)
 - `main.py` — production FastAPI app, **deployed on Cloud Run**. `/health` (public), `/policy` (CRUD), `/learning/respond`, `/override`, `/jobs/learning-check`, `/chat` (streaming SSE — Claude Sonnet 4.6), `/optimize` (runs the full cycle via `optimizer.cycle.run_cycle`). OIDC-token verification for scheduler endpoints via `SCHEDULER_ALLOWED_EMAILS`. Sentry SDK initialised at startup if `SENTRY_DSN` is set (PR5, extended PR10, PR13)
 - `optimizer/v0.py` — rule-based decider. Pure function `plan_next_quarter(state, limits, current_price, avg_price_today, pv_surplus, overrides)` → `Plan` with one of {BOOST, PV-DUMP, COAST, NORMAL, NEG-PRICE, OVERRIDE}. Respects Layer-1 hard limits via clamping helper (PR13)
 - `optimizer/cycle.py` — orchestrates one 15-min cycle: gather state in parallel, compose `StateInput`, plan, apply (clamped), persist `SystemState` + `Decision` to Firestore. Resilient to per-connector failures via `asyncio.gather`-with-fallbacks. Sole entrypoint from `/optimize` (PR13)
@@ -209,7 +210,7 @@ In root:
 - `README.md` — public-facing project overview
 
 **Not yet built (needs you):**
-- `connectors/` — `weheat.py`, `resideo.py`, `shelly.py`, `growatt.py`
+- `connectors/` — real `resideo.py` / `shelly.py` / `growatt.py` (mocks live; real OAuth flows pending)
 - `ai/claude.py` — chat backend with system-context injection
 - `safety/failsafe.py`, `safety/watchdog.py` — failsafe checks
 - (Frontend complete — PR11a/b/c/d shipped)
@@ -243,10 +244,12 @@ Work these top-to-bottom unless you discover a blocker. Each PR is its own branc
    - Sentry SDK init at startup; `SENTRY_DSN` blank in dev silently skips it.
    - `/health` public; `/policy` + `/learning/respond` + `/override` work end-to-end; `/optimize` returns 503 with explicit message until PR6-9 wire device connectors. End-to-end smoke verified: scheduler-triggered `/jobs/learning-check` initialised `data_start` in Firestore.
    - Full runbook in `infra/SETUP.md` (deploy, rollback, log access, secret rotation, missing tunnel/ENTSO-E token notes).
-6. **PR6 — WeHeat connector**
-   - OAuth2 client credentials flow
-   - Endpoints: status (temps, COP, power), setpoint update for boiler
-   - Resilient to API outages (the WeHeat cloud is known flaky — see Home Assistant issues)
+6. **PR6 — WeHeat connector** ✅ shipped
+   - **Important correction during this PR:** the WeHeat public `third_party` API is **read-only** (only `GET` endpoints — confirmed against the OpenAPI shape of `weheat==2026.4.8`). No DHW setpoint writes, no on/off, no manual mode. The Home Assistant integration is `cloud_polling` for the same reason.
+   - Auth: OAuth2 **authorization_code + PKCE** against the WeHeat Keycloak realm (`auth.weheat.nl`), not client_credentials. Public OAuth client `HomeAssistantAPI` (shipped publicly with HA) — anyone with a WeHeat account can use it. Scopes `openid offline_access`. Initial dance happens once via `scripts/weheat_bootstrap.py` (local browser → captures `refresh_token`); Cloud Run reads the refresh token from Secret Manager (`weheat-refresh-token`) and refreshes access tokens headless.
+   - Implementation wraps the official `weheat` SDK (`HeatPumpDiscovery`, `HeatPump`); thin adapter so a future swap is one-file.
+   - Connector returns `WeHeatStatus` (read-only): boiler/buffer/flow/return temps, HP power in/out, COP, compressor %, room thermostat readback, `heat_pump_state` enum. No `set_*` methods anywhere.
+   - `optimizer/cycle.py:_apply_plan` accordingly sends only Shelly relay commands (the immersion heater is the only DHW lever). Boiler-target stays in the Plan as an informational target that drives dompelaar logic.
 7. **PR7 — Resideo Lyric connector**
    - Total Connect Comfort API
    - OAuth2 with refresh tokens
@@ -278,7 +281,7 @@ Roel will obtain these. Document the steps in `infra/SETUP.md` so he can do it w
 |---|---|---|
 | Anthropic | Claude API key | console.anthropic.com → API Keys |
 | ENTSO-E | EPEX prices | Email request to transparency@entsoe.eu |
-| WeHeat | Client ID + Secret | weheat.nl business contact form |
+| WeHeat | Refresh token | One-time `uv run scripts/weheat_bootstrap.py` (uses public HA OAuth client `HomeAssistantAPI`); store result in Secret Manager as `weheat-refresh-token` |
 | Resideo | Client ID + Secret | developer.honeywellhome.com |
 | Shelly Cloud | Auth key | Shelly account → settings → cloud auth |
 | HomeWizard | Token | HomeWizard Energy app → settings → token |

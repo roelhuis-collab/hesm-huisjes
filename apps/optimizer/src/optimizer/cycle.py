@@ -236,33 +236,31 @@ def _avg_price(prices: Any) -> float | None:
 async def _apply_plan(plan: Plan, policy: Policy) -> None:
     """Send the plan to the relevant device clients.
 
-    Real WeHeat / Resideo / Shelly clients raise NotImplementedError
-    until vendor creds arrive (PR12 mocks accept the calls). The cycle
-    swallows those errors so we don't crash on missing creds.
-    """
-    boiler_target = max(
-        policy.limits.boiler_legionella_floor_c,
-        min(plan.boiler_target_temp, policy.limits.boiler_max_c),
-    )
+    WeHeat is read-only — its public ``third_party`` API has no write
+    endpoints, so the heat pump runs on its own internal logic and we
+    only observe. The Plan's ``boiler_target_temp`` is preserved as an
+    informational signal (persisted on the Decision, drives dompelaar
+    logic in v0) but is not pushed to WeHeat. The Shelly relay is
+    therefore the only DHW lever we actually actuate from this cycle.
 
-    weheat = weheat_client()
+    Real Resideo / Shelly clients raise NotImplementedError until vendor
+    creds arrive (PR12 mocks accept the calls). The cycle swallows those
+    errors so we don't crash on missing creds.
+    """
+    del policy  # boiler clamping already happens inside v0._safe_boiler_target
+
     shelly = shelly_client()
     try:
-        await _safe_call(
-            weheat.set_dhw_setpoint(boiler_target),
-            name="weheat-setpoint",
-        )
         await _safe_call(
             shelly.set_relay(plan.dompelaar_on),
             name="shelly-relay",
         )
     finally:
-        await _safe_call(weheat.aclose(), name="weheat-close")
         await _safe_call(shelly.aclose(), name="shelly-close")
 
     log.info(
-        "apply: boiler→%.0f°C dompelaar=%s hp=%s offset=%+.1f°C — %s",
-        boiler_target,
+        "apply: boiler-target=%.0f°C (informational) dompelaar=%s hp=%s offset=%+.1f°C — %s",
+        plan.boiler_target_temp,
         plan.dompelaar_on,
         plan.heat_pump_allowed,
         plan.indoor_setpoint_offset,
