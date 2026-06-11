@@ -21,7 +21,7 @@ PR5 ships the first deployable system; this file is its companion.
 | Scheduler SA | `hesm-scheduler@hesm-huisjes.iam.gserviceaccount.com` |
 | Artifact Registry repo | `europe-west4-docker.pkg.dev/hesm-huisjes/hesm/` |
 | Firestore | Native mode, `europe-west4` |
-| Secret Manager secrets | `anthropic-api-key`, `sentry-dsn` |
+| Secret Manager secrets | `anthropic-api-key`, `sentry-dsn`, `weheat-refresh-token` (PR6) |
 
 ---
 
@@ -260,6 +260,44 @@ gcloud secrets add-iam-policy-binding entsoe-api-token \
 
 Then add to `cloudbuild.yaml` under `--set-secrets`:
 `ENTSOE_API_TOKEN=entsoe-api-token:latest`.
+
+### WeHeat refresh token (PR6)
+
+WeHeat uses OAuth2 `authorization_code + PKCE` against the Keycloak realm
+`auth.weheat.nl`. We use the public Home Assistant OAuth client so no
+business onboarding is required — anyone with a WeHeat account can run
+the bootstrap script.
+
+**Step 1 — capture the refresh token (one-time, on Roel's laptop):**
+
+```bash
+cd apps/optimizer
+uv run scripts/weheat_bootstrap.py
+```
+
+A browser opens, you sign in to your WeHeat account, the script prints
+the refresh token to stdout. The token does not expire under normal
+use; rotate by re-running the script if it gets revoked.
+
+**Step 2 — store it in Secret Manager + grant access:**
+
+```bash
+printf '%s' '<paste-refresh-token>' | gcloud secrets create weheat-refresh-token \
+  --data-file=- --replication-policy=automatic --project=hesm-huisjes
+
+gcloud secrets add-iam-policy-binding weheat-refresh-token \
+  --member="serviceAccount:hesm-optimizer@hesm-huisjes.iam.gserviceaccount.com" \
+  --role="roles/secretmanager.secretAccessor" --project=hesm-huisjes
+```
+
+**Step 3 — mount in `cloudbuild.yaml` under `--set-secrets`:**
+
+```
+WEHEAT_REFRESH_TOKEN=weheat-refresh-token:latest
+```
+
+The connector falls back to `MockWeHeatClient` when `WEHEAT_REFRESH_TOKEN`
+is unset, so the cycle keeps running on staging without it.
 
 ### CI/CD trigger from GitHub
 

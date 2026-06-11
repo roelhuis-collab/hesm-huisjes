@@ -16,6 +16,7 @@ dependencies = [
     "defusedxml>=0.7",
     "google-auth>=2.30",
     "sentry-sdk[fastapi]>=2.10",
+    "weheat>=2026.4.8",
 ]
 
 [project.optional-dependencies]
@@ -68,6 +69,7 @@ files = [
     "src/optimizer",
     "src/main.py",
     "tests",
+    "scripts",
 ]
 
 [[tool.mypy.overrides]]
@@ -78,6 +80,7 @@ module = [
     "google.oauth2.*",
     "defusedxml.*",
     "sentry_sdk.*",
+    "weheat.*",
 ]
 ignore_missing_imports = true
 
