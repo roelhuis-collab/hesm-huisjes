@@ -1,16 +1,19 @@
 /**
- * Energiedirect/Essent terugleverstaffel + per-kWh tariefconstanten.
+ * Energiedirect/Essent terugleverstaffel — HISTORISCHE REFERENTIE.
+ *
+ * Contract Energiedirect liep af 07-07-2026; we draaien nu op Zonneplan
+ * dynamisch (config/site.config.ts → TARIFF_CONFIG). De engine raakt deze
+ * constanten NIET meer aan — bewaard zodat oude beslissingen en
+ * heronderzoek van de staffel-keuze terug te lezen blijven.
  *
  * Bron: tarieven per 25 maart 2026, incl. btw.
- * Banden zijn jaarcumulatief. De marginale staffelkost = (volgende.costPerYear − huidige.costPerYear) / bandbreedte;
- * voor Energiedirect is dat ~€0,13008/kWh (vlakke staffel) — gebruik de generieke berekening
- * zodat ongelijke banden bij andere leveranciers ook kloppen.
- *
- * De Python policy-laag spiegelt deze constanten in
- * apps/optimizer/src/optimizer/dispositie.py — houd beide in sync bij contractwissel.
  */
 
-import type { StaffelBand } from '../types/dispositie';
+interface StaffelBand {
+  min: number;
+  max: number;
+  costPerYear: number;
+}
 
 export const ENERGIEDIRECT_STAFFEL: StaffelBand[] = [
   { min: 0, max: 250, costPerYear: 0.0 },

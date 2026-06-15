@@ -11,13 +11,10 @@
  *  - Full-electric steady state: na gasafsluiting 15-06-2026, WeHeat 8 kW + 3 kW doorstromer
  *
  * Status regime: SALDERING actief t/m 31-12-2026. Schakelt naar 'no_saldering' per 01-01-2027.
- * Status contract: Energiedirect loopt af 07-07-2026 — leverancier nog te kiezen.
- *   De staffel/tarieven hieronder zijn PLACEHOLDER (Energiedirect, slechtste geval).
- *   Vervang door de gekozen leverancier zodra het contract rond is.
+ * Status contract: Zonneplan dynamisch (vanaf 08-07-2026). Geen staffel; engine stuurt op spot.
  */
 
 import type { SiteConfig } from '../types/dispositie';
-import { ENERGIEDIRECT_STAFFEL, TARIFF } from './tariff.energiedirect';
 
 export const SITE_CONFIG: SiteConfig = {
   // --- PV-installatie (gemeten) ---
@@ -58,7 +55,7 @@ export const SITE_BASELINE = {
 
   pvYieldKwh: 10500,            // = SITE_CONFIG.annualPvYieldKwh
   selfConsumptionKwh: 3500,     // ~33% van PV; warmtepomp draait vooral 's winters, weinig PV-overlap
-  grossTerugleveringKwh: 7000,  // STAFFEL-BASIS — pijl op sturen met load shifting
+  grossTerugleveringKwh: 7000,  // bruto teruglevering — relevant voor de 7.500 kWh Zonnebonus-cap
   gridImportKwh: 4100,          // afname van net (= verbruik − zelf-verbruik)
   netPositionKwh: -2900,        // NETTO-EXPORTEUR (import − export)
 
@@ -71,15 +68,41 @@ export const SITE_BASELINE = {
 } as const;
 
 /**
- * Tariefregime. Datum-gestuurde switch: saldering → no_saldering op 01-01-2027.
- * PLACEHOLDER-tarieven (Energiedirect). Vervang bij contractkeuze.
+ * Tariefconfiguratie — Zonneplan dynamisch (contract per 08-07-2026).
+ *
+ * Geen staffel meer, geen vaste terugleverkosten. De engine rekent per kwartier met:
+ *
+ *   importPrice(t) = spot(t) + inkoopvergoedingEurPerKwh + energyTaxEurPerKwh
+ *   exportValue(t) = spot(t) + terugleveropslagEurPerKwh
+ *                    + (overdag & (spot+opslag)>0 & ytdExport<cap ? zonnebonus.percentage × spot : 0)
+ *                    + (saldering.active ? energyTaxEurPerKwh : 0)
+ *
+ * Saldering t/m 31-12-2026 → energyTax wordt teruggegeven op je export (binnen saldeerbereik).
+ * Per 01-01-2027 vervalt de saldering-term: regime_for() in de engine schakelt automatisch.
+ *
+ * Alle bedragen incl. 21% btw. config/tariff.energiedirect.ts blijft staan als historische
+ * referentie van de Energiedirect-staffel (contract afgelopen 07-07-2026) — niet meer in gebruik.
  */
 export const TARIFF_CONFIG = {
-  regime: 'saldering' as const,        // wordt 'no_saldering' per 01-01-2027 (zie engine date-hook)
-  supplier: 'energiedirect-PLACEHOLDER',
-  staffel: ENERGIEDIRECT_STAFFEL,      // VERVANG door gekozen leverancier (overweeg dynamisch = geen staffel)
-  importPriceEurPerKwh: TARIFF.importPriceEurPerKwh,        // 0.23209 all-in
-  feedInTariffSalderingEurPerKwh: TARIFF.feedInTariffSalderingEurPerKwh,
-  feedInCost2027EurPerKwh: 0.078,      // Energiedirect per-kWh terugleverkosten vanaf 2027
-  feedInTariff2027EurPerKwh: 0.06,     // wettelijke bodem ≈ 50% kaal leveringstarief; verfijn bij publicatie
+  contractType: 'dynamic' as const,
+  supplier: 'zonneplan',
+
+  // EPEX-spot komt per kwartier van een SpotPriceProvider (ENTSO-E day-ahead, of stub).
+  // Alleen componenten die we BOVENOP de spot tellen leven hier.
+  inkoopvergoedingEurPerKwh: 0.025,    // Zonneplan inkoopopslag (incl. btw, maandgemiddelde 2026)
+  energyTaxEurPerKwh: 0.1316,          // Energiebelasting 1e schijf 2026 (€0,1088 ex btw × 1,21)
+  terugleveropslagEurPerKwh: 0,        // Zonneplan rekent geen vaste terugleverkosten
+
+  // Zonnebonus: 10% extra op de spot bovenop terugleververgoeding, alleen overdag,
+  // alleen bij positieve (spot+opslag), en capped op 7.500 kWh teruglevering per jaar.
+  zonnebonusCapKwh: 7500,
+  zonnebonusPercentage: 0.10,
+  zonnebonusStartHour: 10,             // inclusief
+  zonnebonusEndHour: 15,               // exclusief
+
+  // Saldering-statusvlag (datum-gestuurd in de engine via regime_for()).
+  saldering: {
+    active: true,
+    untilDate: '2027-01-01',           // saldering vervalt per deze datum
+  },
 } as const;

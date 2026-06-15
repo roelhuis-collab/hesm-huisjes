@@ -38,12 +38,12 @@ from src.connectors.resideo import resideo_client
 from src.connectors.shelly import shelly_client
 from src.connectors.weheat import weheat_client
 from src.optimizer.dispositie import (
-    ENERGIEDIRECT_STAFFEL,
     SITE_CONFIG_DEFAULT,
     TARIFF,
     DispositionDecision,
     EngineConfig,
     EngineState,
+    FlatDayNightSpotPriceProvider,
     decide,
     regime_for,
 )
@@ -320,15 +320,41 @@ def _quarter_interval_start(now: datetime) -> str:
     return now.replace(minute=floor_minute, second=0, microsecond=0).isoformat()
 
 
-def _run_dispositie(
+_SPOT_PROVIDER = FlatDayNightSpotPriceProvider()
+
+
+async def _spot_for_interval(interval_start: str, prices: Any) -> float:
+    """Geef de kale spot-prijs (€/kWh) voor het kwartier.
+
+    Voorkeur: bestaande ENTSO-E day-ahead curve uit ``_gather_all``. Die wordt
+    door connectors/entsoe.py al opgehaald, maar geconverteerd naar VAT-incl.
+    all-in. Hier hebben we de kale spot nodig — we ontconverteren door alleen
+    de ``spot_eur_mwh / 1000`` te nemen wanneer beschikbaar; anders valt-ie
+    terug op de dag/nacht-stub.
+
+    TODO PR15: voeg een dedicated ``EntsoeSpotPriceProvider`` toe die per
+    kwartier (en niet alleen per uur) de spot levert.
+    """
+    if prices:
+        try:
+            hour = datetime.fromisoformat(interval_start).hour
+            entry = prices[min(hour, len(prices) - 1)]
+            spot = float(entry.spot_eur_mwh) / 1000.0
+            return spot
+        except (AttributeError, IndexError, TypeError, ValueError) as exc:
+            log.debug("dispositie: spot from prices failed: %s — using stub", exc)
+    return await _SPOT_PROVIDER.forecast(interval_start)
+
+
+async def _run_dispositie(
     state_input: StateInput,
     gathered: dict[str, Any],
 ) -> DispositionDecision | None:
     """Bereken één dispositie-beslissing en persist hem.
 
     Faalt soft: zonder export-register (P1 export-stand) staan we cum YTD op 0
-    en draaien we alsnog de engine. Onder saldering verandert de gain niet door
-    de staffelpositie (vlakke €0,13/kWh), dus dat is acceptabel als fallback.
+    en draaien we alsnog de engine — de Zonnebonus-cap is dan trivieel onder de
+    7.500 kWh-grens.
     """
     hw: P1MeterReading | None = gathered.get("homewizard")
     export_register_kwh = float(hw.total_export_kwh) if hw and hw.total_export_kwh is not None else 0.0
@@ -350,8 +376,9 @@ def _run_dispositie(
         regime=regime_for(state_input.timestamp),
         site=SITE_CONFIG_DEFAULT,
         tariff=TARIFF,
-        staffel=ENERGIEDIRECT_STAFFEL,
     )
+
+    spot = await _spot_for_interval(interval_start, gathered.get("prices"))
 
     decision = decide(
         interval_start=interval_start,
@@ -359,6 +386,7 @@ def _run_dispositie(
         loads=loads,
         state=EngineState(cum_ytd_teruglevering_kwh=cum_ytd),
         cfg=cfg,
+        spot_price_eur_per_kwh=spot,
     )
 
     try:
@@ -367,8 +395,9 @@ def _run_dispositie(
         log.warning("dispositie: persist failed: %s", exc)
 
     log.info(
-        "dispositie [%s]: surplus=%.3f kWh, cum YTD=%.1f kWh → besparing €%.2f — %s",
+        "dispositie [%s]: spot=%+.3f surplus=%.3f kWh cum YTD=%.1f kWh → €%.2f — %s",
         cfg.regime,
+        decision.spot_price_eur_per_kwh,
         decision.forecast_surplus_kwh,
         decision.cum_ytd_teruglevering_kwh,
         decision.expected_saving_eur,
@@ -400,7 +429,7 @@ async def run_cycle() -> Plan:
     # WeHeat-aansturing alleen advies — de Shelly-relay is al door _apply_plan
     # gezet op basis van v0.
     try:
-        _run_dispositie(state_input, gathered)
+        await _run_dispositie(state_input, gathered)
     except Exception as exc:
         log.warning("dispositie: cycle stage failed (non-fatal): %s", exc)
 

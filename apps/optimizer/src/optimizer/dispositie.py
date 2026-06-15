@@ -1,5 +1,5 @@
 """
-Dispositie-engine — kwartier-besparingsmodule (policy-laag).
+Dispositie-engine — kwartier-besparingsmodule (policy-laag), spot-gedreven.
 
 Per 15-minuten-kwartier kiest deze module wat er met het verwachte PV-overschot
 gebeurt. Vier bestemmingen, gerangschikt naar marginale waarde:
@@ -10,20 +10,24 @@ gebeurt. Vier bestemmingen, gerangschikt naar marginale waarde:
   3. export       — terugleveren naar het net (baseline = 0)
   4. curtail      — export-limiting op de omvormer (noodrem)
 
-Twee tariefregimes:
-  - 'saldering'    — heel 2026, alleen terugleverstaffel telt. Curtail is hier
-    altijd verlies; de engine sluit het uit.
-  - 'no_saldering' — vanaf 01-01-2027. Per-kWh terugleverkosten en feed-in
-    tariff bepalen exportNetValue; bij negatieve waarde wint curtail van export
-    maar verliest nog altijd van self_consume/store.
+Economisch model — Zonneplan dynamisch (zie config/site.config.ts TARIFF_CONFIG):
 
-Constanten (ENERGIEDIRECT_STAFFEL, TARIFF, SITE_CONFIG_DEFAULT) zijn gespiegeld
-uit /config/site.config.ts en /config/tariff.energiedirect.ts. Bij contract-
-of leverancierwissel houd je beide in sync.
+    import_price(t) = spot(t) + inkoopvergoeding + energy_tax
+    export_value(t) = spot(t) + terugleveropslag
+                      + (overdag & (spot+opslag)>0 & cum_ytd_export<cap
+                         ? zonnebonus_pct × spot : 0)
+                      + (saldering.active ? energy_tax : 0)
 
-WeHeat is read-only (zie CLAUDE.md / PR6): de DhwLoad-adapter levert
-controllable=False zolang er geen bevestigde write-adapter bestaat — engine
-schrijft adviezen, schakelt nog niet fysiek.
+Onder saldering (t/m 2026) krijg je de energiebelasting terug op je export
+binnen het saldeerbereik — de self_consume-winst is dan slechts de
+Zonneplan-inkoopvergoeding (~€0,025/kWh). Per 01-01-2027 vervalt die
+energy_tax-term en stijgt self_consume naar ~€0,16/kWh (energy_tax +
+inkoopvergoeding). De Zonnebonus is een Zonneplan-bonus van +10% over de
+spot, alleen overdag, alleen bij positieve (spot+opslag), capped op 7.500 kWh
+teruglevering per kalenderjaar.
+
+config/tariff.energiedirect.ts blijft als historische referentie — niet meer
+gebruikt door de engine.
 """
 
 from __future__ import annotations
@@ -46,15 +50,7 @@ class Disposition(StrEnum):
 
 
 TariffRegime = Literal["saldering", "no_saldering"]
-
-
-@dataclass(frozen=True)
-class StaffelBand:
-    """Eén band uit de jaarcumulatieve terugleverstaffel."""
-
-    min: int
-    max: int
-    cost_per_year: float
+ContractType = Literal["dynamic", "fixed"]
 
 
 @dataclass(frozen=True)
@@ -94,13 +90,31 @@ class SiteConfig:
 
 
 @dataclass(frozen=True)
-class TariffConfig:
-    """Spiegelt /config/tariff.energiedirect.ts → TARIFF + TARIFF_CONFIG-velden."""
+class SalderingConfig:
+    """Saldering-statusvlag. De datum-switch zelf zit in ``regime_for()``."""
 
-    import_price_eur_per_kwh: float
-    feed_in_tariff_saldering_eur_per_kwh: float
-    feed_in_cost_2027_eur_per_kwh: float
-    feed_in_tariff_2027_eur_per_kwh: float
+    active: bool = True
+    until_date: str = "2027-01-01"
+
+
+@dataclass(frozen=True)
+class TariffConfig:
+    """Spiegelt /config/site.config.ts → TARIFF_CONFIG (Zonneplan dynamisch).
+
+    Alle bedragen incl. 21% btw. ``spot(t)`` komt per kwartier van een
+    ``SpotPriceProvider`` en wordt nooit hier opgeslagen.
+    """
+
+    inkoopvergoeding_eur_per_kwh: float
+    energy_tax_eur_per_kwh: float
+    terugleveropslag_eur_per_kwh: float
+    zonnebonus_cap_kwh: float
+    zonnebonus_percentage: float
+    zonnebonus_start_hour: int
+    zonnebonus_end_hour: int
+    saldering: SalderingConfig = field(default_factory=SalderingConfig)
+    contract_type: ContractType = "dynamic"
+    supplier: str = "zonneplan"
 
 
 @dataclass
@@ -125,6 +139,7 @@ class DispositionAllocation:
 class DispositionDecision:
     interval_start: str
     regime: TariffRegime
+    spot_price_eur_per_kwh: float
     forecast_surplus_kwh: float
     cum_ytd_teruglevering_kwh: float
     allocations: list[DispositionAllocation]
@@ -135,6 +150,7 @@ class DispositionDecision:
         return {
             "interval_start": self.interval_start,
             "regime": self.regime,
+            "spot_price_eur_per_kwh": self.spot_price_eur_per_kwh,
             "forecast_surplus_kwh": self.forecast_surplus_kwh,
             "cum_ytd_teruglevering_kwh": self.cum_ytd_teruglevering_kwh,
             "allocations": [
@@ -176,75 +192,51 @@ class LoadProvider(Protocol):
     async def available_loads(self, interval_start: str) -> list[DeferrableLoad]: ...
 
 
-class DynamicPriceProvider(Protocol):
-    """Hook voor latere dynamische-prijs-bron (negatieve-prijs-curtailment).
+class SpotPriceProvider(Protocol):
+    """Kale EPEX day-ahead spot-prijs voor het kwartier (€/kWh, incl. niets)."""
 
-    Een implementatie kan bv. de ENTSO-E-prijs voor het komende kwartier
-    teruggeven; de engine verwerkt deze ALLEEN in regime 'no_saldering'
-    en alleen om export_net te overrulen wanneer de spotprijs negatief is.
-    Default: ``None`` → engine gebruikt de staffel/feed-in-vergoeding.
+    async def forecast(self, interval_start: str) -> float: ...
+
+
+class FlatDayNightSpotPriceProvider:
+    """Stub-implementatie: vlak dag/nacht-profiel.
+
+    Geeft een dag-tarief tijdens 08:00–22:00 en een nacht-tarief daarbuiten.
+    Bedoeld voor ontwikkelen + smoke-tests tot de echte ENTSO-E-koppeling
+    landt — dan kan deze in een aparte PR vervangen worden door een
+    ``EntsoeSpotPriceProvider`` die de bestaande ``entsoe_client`` aanroept
+    en de all-in-conversie OVERSLAAT (we willen hier de kale spot, niet
+    het VAT-inclusieve retail-tarief).
+
+    TODO PR15: vervang door echte EPEX-koppeling (ENTSO-E day-ahead, A44/A01,
+    NL-domein 10YNL----------L). De entsoe-connector geeft nu all-in;
+    we hebben hier ``spot/1000`` nodig (kale €/kWh, vóór belasting en btw).
     """
 
-    async def negative_export_value_eur_per_kwh(self, interval_start: str) -> float | None: ...
+    def __init__(
+        self,
+        day_eur_per_kwh: float = 0.10,
+        night_eur_per_kwh: float = 0.05,
+        day_start_hour: int = 8,
+        day_end_hour: int = 22,
+    ) -> None:
+        self._day = day_eur_per_kwh
+        self._night = night_eur_per_kwh
+        self._day_start = day_start_hour
+        self._day_end = day_end_hour
+
+    async def forecast(self, interval_start: str) -> float:
+        hour = datetime.fromisoformat(interval_start).hour
+        if self._day_start <= hour < self._day_end:
+            return self._day
+        return self._night
 
 
 # ---------------------------------------------------------------------------
-# Energiedirect-staffel + tariefconstanten (gespiegeld uit TS)
+# Tarief- + sitespiegels (waarden uit /config/site.config.ts)
 # ---------------------------------------------------------------------------
 
 
-ENERGIEDIRECT_STAFFEL: list[StaffelBand] = [
-    StaffelBand(0, 250, 0.00),
-    StaffelBand(251, 500, 48.84),
-    StaffelBand(501, 750, 81.36),
-    StaffelBand(751, 1000, 113.64),
-    StaffelBand(1001, 1250, 146.28),
-    StaffelBand(1251, 1500, 178.80),
-    StaffelBand(1501, 1750, 211.32),
-    StaffelBand(1751, 2000, 243.84),
-    StaffelBand(2001, 2250, 276.36),
-    StaffelBand(2251, 2500, 308.76),
-    StaffelBand(2501, 2750, 341.28),
-    StaffelBand(2751, 3000, 373.80),
-    StaffelBand(3001, 3250, 406.32),
-    StaffelBand(3251, 3500, 438.84),
-    StaffelBand(3501, 3750, 471.36),
-    StaffelBand(3751, 4000, 503.76),
-    StaffelBand(4001, 4250, 536.28),
-    StaffelBand(4251, 4500, 568.80),
-    StaffelBand(4501, 4750, 601.32),
-    StaffelBand(4751, 5000, 633.84),
-    StaffelBand(5001, 5250, 666.24),
-    StaffelBand(5251, 5500, 698.76),
-    StaffelBand(5501, 5750, 731.28),
-    StaffelBand(5751, 6000, 763.80),
-    StaffelBand(6001, 6250, 796.32),
-    StaffelBand(6251, 6500, 828.84),
-    StaffelBand(6501, 6750, 861.24),
-    StaffelBand(6751, 7000, 893.76),
-    StaffelBand(7001, 7250, 926.28),
-    StaffelBand(7251, 7500, 958.80),
-    StaffelBand(7501, 7750, 991.32),
-    StaffelBand(7751, 8000, 1023.84),
-    StaffelBand(8001, 8250, 1056.24),
-    StaffelBand(8251, 8500, 1088.76),
-    StaffelBand(8501, 8750, 1121.28),
-    StaffelBand(8751, 9000, 1153.80),
-    StaffelBand(9001, 9250, 1186.32),
-    StaffelBand(9251, 9500, 1218.84),
-    StaffelBand(9501, 9750, 1251.24),
-    StaffelBand(9751, 10000, 1283.76),
-    StaffelBand(10001, 9_999_999, 1332.48),
-]
-
-TARIFF = TariffConfig(
-    import_price_eur_per_kwh=0.23209,
-    feed_in_tariff_saldering_eur_per_kwh=0.15 * 1.21,
-    feed_in_cost_2027_eur_per_kwh=0.078,
-    feed_in_tariff_2027_eur_per_kwh=0.06,
-)
-
-# Spiegelt SITE_CONFIG uit /config/site.config.ts (Kempenstraat 3, 6137 KL Sittard).
 REGIME_SWITCH_DATE = date(2027, 1, 1)
 
 
@@ -254,6 +246,20 @@ def regime_for(when: date | datetime) -> TariffRegime:
         when = when.date()
     return "saldering" if when < REGIME_SWITCH_DATE else "no_saldering"
 
+
+# Zonneplan dynamisch — incl. btw, bron: config/site.config.ts → TARIFF_CONFIG.
+TARIFF = TariffConfig(
+    inkoopvergoeding_eur_per_kwh=0.025,
+    energy_tax_eur_per_kwh=0.1316,
+    terugleveropslag_eur_per_kwh=0.0,
+    zonnebonus_cap_kwh=7500.0,
+    zonnebonus_percentage=0.10,
+    zonnebonus_start_hour=10,
+    zonnebonus_end_hour=15,
+    saldering=SalderingConfig(active=True, until_date="2027-01-01"),
+    contract_type="dynamic",
+    supplier="zonneplan",
+)
 
 SITE_CONFIG_DEFAULT = SiteConfig(
     pv_kwp=10.53,
@@ -274,46 +280,44 @@ SITE_CONFIG_DEFAULT = SiteConfig(
 
 
 # ---------------------------------------------------------------------------
-# Pure functies — staffel-rekenwerk
+# Prijsformules
 # ---------------------------------------------------------------------------
 
 
-def staffel_cost_at(cum_kwh: float, staffel: list[StaffelBand]) -> float:
-    """Totale jaar-staffelkost voor `cum_kwh` teruggeleverde kWh."""
-    band = _find_band(cum_kwh, staffel)
-    return band.cost_per_year
+def import_price(spot_eur_per_kwh: float, tariff: TariffConfig) -> float:
+    """All-in invoerprijs: kale spot + Zonneplan-opslag + energiebelasting (incl. btw)."""
+    return spot_eur_per_kwh + tariff.inkoopvergoeding_eur_per_kwh + tariff.energy_tax_eur_per_kwh
 
 
-def marginal_staffel_cost(cum_kwh: float, staffel: list[StaffelBand]) -> float:
-    """Marginale kost van één extra teruggeleverde kWh op `cum_kwh` cumulatief.
+def export_value(
+    spot_eur_per_kwh: float,
+    *,
+    interval_hour: int,
+    cum_ytd_teruglevering_kwh: float,
+    regime: TariffRegime,
+    tariff: TariffConfig,
+) -> float:
+    """Waarde van één teruggeleverde kWh, incl. Zonnebonus en saldering-restitutie.
 
-    Bij Energiedirect (vlakke €32,52 per 250-kWh-band) levert dit ≈ €0,13008/kWh.
-    De berekening is generiek zodat ongelijke banden bij andere leveranciers ook
-    correct verwerkt worden.
+    Componenten:
+      - basis             = spot + terugleveropslag
+      - + Zonnebonus      = zonnebonus_pct × spot, alleen overdag, alleen wanneer
+                            basis > 0 én cum YTD < cap
+      - + energy_tax      = alleen wanneer regime=='saldering' (saldeerbereik t/m 2026)
     """
-    band = _find_band(cum_kwh, staffel)
-    next_band = _next_band(band, staffel)
-    if next_band is None:
-        return 0.0
-    width = band.max - band.min + 1
-    step = next_band.cost_per_year - band.cost_per_year
-    if step <= 0 or width <= 0:
-        return 0.0
-    return step / width
+    base = spot_eur_per_kwh + tariff.terugleveropslag_eur_per_kwh
 
+    daytime = tariff.zonnebonus_start_hour <= interval_hour < tariff.zonnebonus_end_hour
+    under_cap = cum_ytd_teruglevering_kwh < tariff.zonnebonus_cap_kwh
+    bonus = (
+        tariff.zonnebonus_percentage * spot_eur_per_kwh
+        if daytime and under_cap and base > 0
+        else 0.0
+    )
 
-def _find_band(cum_kwh: float, staffel: list[StaffelBand]) -> StaffelBand:
-    for band in staffel:
-        if band.min <= cum_kwh <= band.max:
-            return band
-    return staffel[-1]
+    saldering_tax = tariff.energy_tax_eur_per_kwh if regime == "saldering" else 0.0
 
-
-def _next_band(current: StaffelBand, staffel: list[StaffelBand]) -> StaffelBand | None:
-    for band in staffel:
-        if band.min > current.max:
-            return band
-    return None
+    return base + bonus + saldering_tax
 
 
 # ---------------------------------------------------------------------------
@@ -322,10 +326,7 @@ def _next_band(current: StaffelBand, staffel: list[StaffelBand]) -> StaffelBand 
 
 
 def battery_charge_room_kwh(battery: BatteryConfig, soc_kwh: float, interval_minutes: int = 15) -> float:
-    """Hoeveel kWh kan de accu dit kwartier nog opnemen?
-
-    Beperkt door zowel headroom (usableKwh − soc) als laadvermogen × tijd.
-    """
+    """Hoeveel kWh kan de accu dit kwartier nog opnemen?"""
     headroom = max(0.0, battery.usable_kwh - soc_kwh)
     max_charge_kwh = battery.max_charge_kw * (interval_minutes / 60.0)
     return min(headroom, max_charge_kwh)
@@ -364,57 +365,46 @@ class EngineConfig:
     regime: TariffRegime
     site: SiteConfig
     tariff: TariffConfig
-    staffel: list[StaffelBand] = field(default_factory=lambda: ENERGIEDIRECT_STAFFEL)
     interval_minutes: int = 15
 
 
 def _gain_per_disposition(
     disposition: Disposition,
-    cfg: EngineConfig,
-    staffel_marg: float,
-    export_net: float,
+    *,
+    import_p: float,
+    export_v: float,
+    rte: float,
 ) -> float:
-    import_p = cfg.tariff.import_price_eur_per_kwh
-    rte = cfg.site.battery.round_trip_efficiency if cfg.site.battery else 0.9
-
-    if cfg.regime == "saldering":
-        if disposition is Disposition.SELF_CONSUME:
-            return staffel_marg
-        if disposition is Disposition.STORE:
-            return staffel_marg * rte
-        if disposition is Disposition.EXPORT:
-            return 0.0
-        if disposition is Disposition.CURTAIL:
-            # Onder saldering: gooi je saldeerwaarde weg om alleen staffel te besparen → altijd negatief.
-            return -(import_p - staffel_marg)
-    else:
-        if disposition is Disposition.SELF_CONSUME:
-            return import_p - export_net
-        if disposition is Disposition.STORE:
-            return import_p * rte - export_net
-        if disposition is Disposition.EXPORT:
-            return 0.0
-        if disposition is Disposition.CURTAIL:
-            # Positief zodra export_net < 0 (negatieve terugleververgoeding).
-            return -export_net
+    """Marginale winst t.o.v. terugleveren (= baseline = 0)."""
+    if disposition is Disposition.SELF_CONSUME:
+        return import_p - export_v
+    if disposition is Disposition.STORE:
+        return import_p * rte - export_v
+    if disposition is Disposition.EXPORT:
+        return 0.0
+    if disposition is Disposition.CURTAIL:
+        # Positief zodra export_v < 0 (negatieve marktprijs onder saldering of no_saldering).
+        return -export_v
     raise ValueError(f"Unknown disposition: {disposition!r}")
 
 
 def _build_rationale(
     allocations: list[DispositionAllocation],
     regime: TariffRegime,
-    export_net: float,
+    spot: float,
+    export_v: float,
 ) -> str:
+    regime_label = "saldering" if regime == "saldering" else "no_saldering"
+    head = f"[{regime_label}] spot={spot:+.3f} exportValue={export_v:+.3f}"
     if not allocations:
-        return "Geen surplus dit kwartier — niets te alloceren."
+        return f"{head} — geen surplus."
     parts: list[str] = []
     for a in allocations:
         label = a.disposition.value
         if a.load_id:
             label = f"{label}:{a.load_id}"
         parts.append(f"{label} {a.kwh:.3f} kWh @ +€{a.marginal_gain_eur_per_kwh:.3f}/kWh")
-    regime_label = "saldering" if regime == "saldering" else f"no_saldering (exportNet={export_net:+.3f})"
-    return f"[{regime_label}] " + " → ".join(parts)
+    return f"{head} — " + " → ".join(parts)
 
 
 def decide(
@@ -423,17 +413,24 @@ def decide(
     loads: list[DeferrableLoad],
     state: EngineState,
     cfg: EngineConfig,
+    *,
+    spot_price_eur_per_kwh: float,
 ) -> DispositionDecision:
     """Beslis voor één kwartier waar het PV-overschot heen moet.
 
     Greedy: sorteer kandidaten op marginale winst t.o.v. terugleveren en vul tot
-    `forecast_surplus_kwh` op is.
+    ``forecast_surplus_kwh`` op is.
     """
-    staffel_marg = marginal_staffel_cost(state.cum_ytd_teruglevering_kwh, cfg.staffel)
-    export_net = (
-        0.0
-        if cfg.regime == "saldering"
-        else cfg.tariff.feed_in_tariff_2027_eur_per_kwh - cfg.tariff.feed_in_cost_2027_eur_per_kwh
+    interval_hour = datetime.fromisoformat(interval_start).hour
+    rte = cfg.site.battery.round_trip_efficiency if cfg.site.battery else 0.9
+
+    import_p = import_price(spot_price_eur_per_kwh, cfg.tariff)
+    export_v = export_value(
+        spot_price_eur_per_kwh,
+        interval_hour=interval_hour,
+        cum_ytd_teruglevering_kwh=state.cum_ytd_teruglevering_kwh,
+        regime=cfg.regime,
+        tariff=cfg.tariff,
     )
 
     candidates: list[_Candidate] = []
@@ -445,7 +442,12 @@ def decide(
             _Candidate(
                 disposition=Disposition.SELF_CONSUME,
                 capacity_kwh=load.available_kwh,
-                gain=_gain_per_disposition(Disposition.SELF_CONSUME, cfg, staffel_marg, export_net),
+                gain=_gain_per_disposition(
+                    Disposition.SELF_CONSUME,
+                    import_p=import_p,
+                    export_v=export_v,
+                    rte=rte,
+                ),
                 load_id=load.id,
             )
         )
@@ -458,7 +460,12 @@ def decide(
                 _Candidate(
                     disposition=Disposition.STORE,
                     capacity_kwh=room,
-                    gain=_gain_per_disposition(Disposition.STORE, cfg, staffel_marg, export_net),
+                    gain=_gain_per_disposition(
+                        Disposition.STORE,
+                        import_p=import_p,
+                        export_v=export_v,
+                        rte=rte,
+                    ),
                 )
             )
 
@@ -466,14 +473,18 @@ def decide(
         _Candidate(
             disposition=Disposition.EXPORT,
             capacity_kwh=export_room_kwh(cfg.site, cfg.interval_minutes),
-            gain=_gain_per_disposition(Disposition.EXPORT, cfg, staffel_marg, export_net),
+            gain=_gain_per_disposition(
+                Disposition.EXPORT, import_p=import_p, export_v=export_v, rte=rte
+            ),
         )
     )
     candidates.append(
         _Candidate(
             disposition=Disposition.CURTAIL,
             capacity_kwh=float("inf"),
-            gain=_gain_per_disposition(Disposition.CURTAIL, cfg, staffel_marg, export_net),
+            gain=_gain_per_disposition(
+                Disposition.CURTAIL, import_p=import_p, export_v=export_v, rte=rte
+            ),
         )
     )
 
@@ -506,41 +517,43 @@ def decide(
     return DispositionDecision(
         interval_start=interval_start,
         regime=cfg.regime,
+        spot_price_eur_per_kwh=_round3(spot_price_eur_per_kwh),
         forecast_surplus_kwh=_round3(forecast_surplus_kwh),
         cum_ytd_teruglevering_kwh=_round3(state.cum_ytd_teruglevering_kwh),
         allocations=allocations,
         expected_saving_eur=_round2(expected_saving),
-        rationale=_build_rationale(allocations, cfg.regime, export_net),
+        rationale=_build_rationale(allocations, cfg.regime, spot_price_eur_per_kwh, export_v),
     )
 
 
 __all__ = [
-    "ENERGIEDIRECT_STAFFEL",
     "REGIME_SWITCH_DATE",
     "SITE_CONFIG_DEFAULT",
     "TARIFF",
     "BatteryConfig",
+    "ContractType",
     "DeferrableLoad",
     "Disposition",
     "DispositionAllocation",
     "DispositionDecision",
-    "DynamicPriceProvider",
     "EngineConfig",
     "EngineState",
     "EvChargerConfig",
+    "FlatDayNightSpotPriceProvider",
     "HeatPumpConfig",
     "LoadProvider",
+    "SalderingConfig",
     "SiteConfig",
-    "StaffelBand",
+    "SpotPriceProvider",
     "SurplusForecastProvider",
     "TariffConfig",
     "TariffRegime",
     "battery_charge_room_kwh",
     "decide",
     "export_room_kwh",
-    "marginal_staffel_cost",
+    "export_value",
+    "import_price",
     "regime_for",
-    "staffel_cost_at",
 ]
 
 

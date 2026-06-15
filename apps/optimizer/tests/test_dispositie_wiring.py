@@ -88,6 +88,7 @@ def _sample_decision() -> DispositionDecision:
     return DispositionDecision(
         interval_start="2026-06-15T12:00:00",
         regime="saldering",
+        spot_price_eur_per_kwh=0.085,
         forecast_surplus_kwh=1.5,
         cum_ytd_teruglevering_kwh=4200.0,
         allocations=[

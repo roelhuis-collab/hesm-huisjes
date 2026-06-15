@@ -46,16 +46,25 @@ Naast `optimizer/v0.py` draait per kwartier een **dispositie-engine** (`optimize
 3. **Terugleveren** — naar het net. Baseline, gain = €0.
 4. **Curtailen** — export-limiting op de omvormer. Noodrem.
 
-Twee tariefregimes, datum-gestuurd via `regime_for()` (`optimizer/dispositie.py`):
+Sinds 08-07-2026 draait het huis op **Zonneplan dynamisch** (`config/site.config.ts` → `TARIFF_CONFIG`). De engine rekent per kwartier met de kale EPEX-spot (uit een `SpotPriceProvider`) plus de Zonneplan-componenten:
 
-* **Saldering** (heel 2026): alleen de Energiedirect-terugleverstaffel telt. Zelf verbruiken levert ≈ €0,13/kWh op (vlakke staffel). Curtailen verliest altijd onder saldering → engine sluit het uit.
-* **No saldering** (vanaf 01-01-2027): per-kWh terugleverkosten + feed-in vergoeding bepalen `exportNet = feedIn − feedInCost`. Zelf verbruiken ≈ importprijs − exportNet. Curtailen wint pas van terugleveren als `exportNet < 0`; zelf verbruiken/opslaan verslaat het altijd. Een `DynamicPriceProvider`-hook staat klaar voor latere negatieve-prijs-curtailment uit ENTSO-E.
+```
+importPrice(t) = spot(t) + inkoopvergoeding + energiebelasting
+exportValue(t) = spot(t) + terugleveropslag
+                 + (overdag & (spot+opslag)>0 & cumYtd<7500 ? 10% × spot : 0)   // Zonnebonus
+                 + (saldering.active ? energiebelasting : 0)                    // restitutie binnen saldeerbereik
+```
 
-Greedy-allocatie: kandidaten op marginale winst sorteren, vullen tot het surplus op is. De staffel-positie (cum YTD teruglevering) komt uit het ZIV ESMR5 **teruglever-register** (P1 `total_export_kwh`), niet uit de netto-stand — bijgehouden in `dispositie/cum_teruglevering` met jaarwissel-reset.
+Marginale winst t.o.v. terugleveren: `self_consume = importPrice − exportValue`, `store = importPrice·rte − exportValue`, `export = 0` (baseline), `curtail = −exportValue` (positief bij negatieve marktprijs).
 
-Site-waarden staan in `config/site.config.ts` (Kempenstraat 3 Sittard: 10,53 kWp, ~10.500 kWh opwek, WeHeat P80, ~−2.900 kWh netto). De Python-engine spiegelt deze constanten — bij contract- of leverancierwissel houd je beide in sync (`config/tariff.energiedirect.ts` en `dispositie.py`).
+Twee tariefregimes, datum-gestuurd via `regime_for()`:
 
-Beslissingen worden per kwartier naar Firestore (`disposition_decisions/`) geschreven. Het PWA-scherm **`/dispositie`** toont vandaag's besparing, de staffelpositie en de allocatie-tijdlijn live. Zolang `heat_pump.controllable=false` blijft (geen bevestigde WeHeat write-adapter) schrijft de engine adviezen en schakelt niet fysiek. Golden case: 8.100 → 6.600 kWh teruglevering = €195/jaar besparing (matcht de rekentool).
+* **Saldering** (t/m 2026): energiebelasting komt terug op je export binnen het saldeerbereik → `exportValue` is hoog, `self_consume`-winst is alleen de Zonneplan-inkoopvergoeding (~€0,025/kWh).
+* **No saldering** (vanaf 01-01-2027): `exportValue` zonder energiebelasting-restitutie → `self_consume`-winst stijgt naar ~€0,16/kWh (energiebelasting + inkoopvergoeding) onafhankelijk van de spot. Curtail wint pas van export bij negatieve marktprijs; self_consume verslaat dat economisch zelden, behalve bij extreem negatieve spot.
+
+**Zonnebonus** is een Zonneplan-bonus: +10% over de spot bovenop de gewone terugleververgoeding, alleen tussen 10:00 en 15:00, alleen wanneer `(spot + terugleveropslag) > 0`, en capped op 7.500 kWh teruglevering per kalenderjaar. De cum YTD-teruglevering komt uit het ZIV ESMR5 **teruglever-register** (P1 `total_export_kwh`), niet uit de netto-stand — bijgehouden in `dispositie/cum_teruglevering` met jaarwissel-reset.
+
+Beslissingen worden per kwartier naar Firestore (`disposition_decisions/`) geschreven. Het PWA-scherm **`/dispositie`** toont vandaag's besparing, de actuele spot, de Zonnebonus-ruimte en de allocatie-tijdlijn live. Zolang `heat_pump.controllable=false` blijft (geen bevestigde WeHeat write-adapter) schrijft de engine adviezen en schakelt niet fysiek. `FlatDayNightSpotPriceProvider` is voorlopig de stub-spot-bron; echte EPEX-koppeling (per-kwartier) staat op de roadmap. `config/tariff.energiedirect.ts` blijft als historische referentie van de Energiedirect-staffel (contract afgelopen 07-07-2026) — niet meer in gebruik door de engine.
 
 ## Repo-layout
 

@@ -1,24 +1,20 @@
 /**
- * HESM by Huisjes — types voor de dispositie-engine.
+ * HESM by Huisjes — types voor de dispositie-engine (spot-gedreven).
  *
  * De engine kiest per kwartier een bestemming voor het PV-overschot
  * (zelf verbruiken / opslaan / terugleveren / curtailen) en optimaliseert
- * tegen de terugleverstaffel (2026, saldering) en het per-kWh-regime (2027).
+ * tegen de live spot-prijs + de Zonneplan-tariefcomponenten in TARIFF_CONFIG.
  *
- * Deze types vormen het publieke datamodel. De Python policy-laag
- * (apps/optimizer/src/optimizer/dispositie.py) spiegelt deze structuren
- * met dataclasses voor runtime-gebruik in Cloud Run.
+ * De Python policy-laag (apps/optimizer/src/optimizer/dispositie.py) spiegelt
+ * deze structuren met dataclasses voor runtime-gebruik in Cloud Run.
+ *
+ * config/tariff.energiedirect.ts bevat de oude staffel en blijft als historische
+ * referentie staan — de engine raakt 'm niet meer aan.
  */
 
 export type Disposition = 'self_consume' | 'store' | 'export' | 'curtail';
 
 export type TariffRegime = 'saldering' | 'no_saldering';
-
-export interface StaffelBand {
-  min: number;
-  max: number;
-  costPerYear: number;
-}
 
 export interface BatteryConfig {
   usableKwh: number;
@@ -67,6 +63,7 @@ export interface DispositionAllocation {
 export interface DispositionDecision {
   intervalStart: string;
   regime: TariffRegime;
+  spotPriceEurPerKwh: number;
   forecastSurplusKwh: number;
   cumYtdTerugleveringKwh: number;
   allocations: DispositionAllocation[];

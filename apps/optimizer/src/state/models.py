@@ -283,6 +283,7 @@ class DispositionDecisionDTO(BaseModel):
 
     interval_start: str = Field(description="ISO 8601 kwartiergrens, UTC")
     regime: Literal["saldering", "no_saldering"]
+    spot_price_eur_per_kwh: float = Field(default=0.0, description="Kale EPEX-spot voor het kwartier")
     forecast_surplus_kwh: float
     cum_ytd_teruglevering_kwh: float
     allocations: list[DispositionAllocationDTO] = Field(default_factory=list)
@@ -294,6 +295,7 @@ class DispositionDecisionDTO(BaseModel):
         return cls(
             interval_start=src.interval_start,
             regime=src.regime,
+            spot_price_eur_per_kwh=src.spot_price_eur_per_kwh,
             forecast_surplus_kwh=src.forecast_surplus_kwh,
             cum_ytd_teruglevering_kwh=src.cum_ytd_teruglevering_kwh,
             allocations=[DispositionAllocationDTO.from_dataclass(a) for a in src.allocations],
@@ -306,6 +308,7 @@ class DispositionDecisionDTO(BaseModel):
         return DispositionDecision(
             interval_start=self.interval_start,
             regime=regime,
+            spot_price_eur_per_kwh=self.spot_price_eur_per_kwh,
             forecast_surplus_kwh=self.forecast_surplus_kwh,
             cum_ytd_teruglevering_kwh=self.cum_ytd_teruglevering_kwh,
             allocations=[a.to_dataclass() for a in self.allocations],

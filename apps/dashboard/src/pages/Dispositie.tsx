@@ -1,9 +1,9 @@
 /**
- * Dispositie — kwartier-besparingsadvies.
+ * Dispositie — kwartier-besparingsadvies (Zonneplan dynamisch).
  *
  * Toont voor vandaag:
  *  - som van expected_saving_eur over alle kwartieren
- *  - cum YTD teruglevering + staffelpositie (kWh tot volgende grens)
+ *  - cum YTD teruglevering + Zonnebonus-koppositie (kWh tot 7.500-cap)
  *  - laatste 24 uur aan allocaties als timeline
  *
  * Subscribt op ``disposition_decisions`` in Firestore. Live updates via
@@ -17,8 +17,9 @@ import { Link } from 'react-router-dom';
 
 import {
   type DispositionDecision,
+  TARIFF_CONFIG,
   dispositionLabel,
-  staffelPositionFor,
+  zonnebonusRemainingKwh,
 } from '../lib/dispositie';
 import { db } from '../lib/firebase';
 
@@ -61,9 +62,12 @@ export default function Dispositie() {
   );
 
   const totalSavingToday = todays.reduce((sum, d) => sum + (d.expected_saving_eur ?? 0), 0);
-  const latestCumYtd = decisions[0]?.cum_ytd_teruglevering_kwh ?? 0;
-  const latestRegime = decisions[0]?.regime ?? 'saldering';
-  const position = staffelPositionFor(latestCumYtd);
+  const latest = decisions[0];
+  const latestCumYtd = latest?.cum_ytd_teruglevering_kwh ?? 0;
+  const latestRegime = latest?.regime ?? 'saldering';
+  const latestSpot = latest?.spot_price_eur_per_kwh ?? 0;
+  const zonnebonusLeft = zonnebonusRemainingKwh(latestCumYtd);
+  const capReached = zonnebonusLeft <= 0;
 
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100">
@@ -77,7 +81,7 @@ export default function Dispositie() {
           </Link>
           <h1 className="text-sm font-light tracking-wide">Dispositie-advies</h1>
           <span className="text-[10px] uppercase tracking-widest text-slate-600">
-            {latestRegime === 'saldering' ? 'saldering' : 'no saldering'}
+            {latestRegime === 'saldering' ? 'saldering' : 'no saldering'} · {TARIFF_CONFIG.supplier}
           </span>
         </div>
       </header>
@@ -90,18 +94,22 @@ export default function Dispositie() {
             footnote={`${todays.length} kwartieren geregistreerd`}
           />
           <Card
-            title="Cum YTD teruglevering"
-            value={`${Math.round(latestCumYtd).toLocaleString('nl-NL')} kWh`}
-            footnote={
-              position.kwhUntilNextBorder !== null
-                ? `nog ${Math.round(position.kwhUntilNextBorder).toLocaleString('nl-NL')} kWh tot grens ${position.nextBorderKwh?.toLocaleString('nl-NL')} kWh`
-                : 'bovenste staffelband bereikt'
-            }
+            title="Spot nu"
+            value={`€${latestSpot.toFixed(3)}/kWh`}
+            footnote={`+ inkoopvergoeding €${TARIFF_CONFIG.inkoopvergoedingEurPerKwh.toFixed(3)} + energiebelasting €${TARIFF_CONFIG.energyTaxEurPerKwh.toFixed(3)}`}
           />
           <Card
-            title="Marginale staffelkost"
-            value={`€${position.marginalEurPerKwh.toFixed(3)}/kWh`}
-            footnote={`huidige band ${position.currentBand.min}–${position.currentBand.max} kWh (€${position.currentBand.costPerYear.toFixed(2)}/jr)`}
+            title="Zonnebonus-ruimte"
+            value={
+              capReached
+                ? 'cap bereikt'
+                : `${Math.round(zonnebonusLeft).toLocaleString('nl-NL')} kWh`
+            }
+            footnote={
+              capReached
+                ? `cumulatieve teruglevering ${Math.round(latestCumYtd).toLocaleString('nl-NL')} kWh boven 7.500 kWh`
+                : `+${(TARIFF_CONFIG.zonnebonusPercentage * 100).toFixed(0)}% over spot tussen ${TARIFF_CONFIG.zonnebonusStartHour}:00 en ${TARIFF_CONFIG.zonnebonusEndHour}:00`
+            }
           />
         </div>
 
@@ -157,11 +165,15 @@ function DecisionRow({ decision }: { decision: DispositionDecision }) {
   const ts = new Date(decision.interval_start);
   const hh = String(ts.getHours()).padStart(2, '0');
   const mm = String(ts.getMinutes()).padStart(2, '0');
+  const spot = decision.spot_price_eur_per_kwh ?? 0;
 
   return (
     <li className="flex items-start gap-3 rounded-md border border-slate-800/60 bg-slate-900/40 px-3 py-2">
       <span className="font-mono tabular-nums text-xs text-slate-500 pt-1">
         {hh}:{mm}
+      </span>
+      <span className="font-mono tabular-nums text-xs text-slate-400 pt-1 w-16 text-right">
+        €{spot.toFixed(3)}
       </span>
       <div className="flex-1 min-w-0">
         <div className="flex flex-wrap items-center gap-2">
