@@ -4,6 +4,7 @@
  * - ``/signin``                  : public, the only route reachable signed-out
  * - ``/``                        : Simple page (the iPad default)
  * - ``/advanced``                : detail dashboard (lazy-loaded — Recharts is heavy)
+ * - ``/dispositie``              : kwartier-besparingsadvies
  * - ``/settings``                : settings landing
  * - ``/settings/limits``         : Layer-1 hard limits
  * - ``/settings/strategy``       : Layer-2 strategy + weights
@@ -35,6 +36,7 @@ import SettingsIndex from './pages/settings';
 import StrategyPage from './pages/settings/Strategy';
 
 const Advanced = lazy(() => import('./pages/Advanced'));
+const Dispositie = lazy(() => import('./pages/Dispositie'));
 
 function RequireAuth({ children }: { children: ReactNode }) {
   const { user, loading } = useAuth();
@@ -63,6 +65,7 @@ export default function App() {
           <Route path="/signin" element={<SignIn />} />
           <Route path="/" element={<RequireAuth><Simple /></RequireAuth>} />
           <Route path="/advanced" element={<RequireAuth><Advanced /></RequireAuth>} />
+          <Route path="/dispositie" element={<RequireAuth><Dispositie /></RequireAuth>} />
           <Route path="/settings" element={<RequireAuth><SettingsIndex /></RequireAuth>} />
           <Route path="/settings/limits" element={<RequireAuth><Limits /></RequireAuth>} />
           <Route path="/settings/strategy" element={<RequireAuth><StrategyPage /></RequireAuth>} />
