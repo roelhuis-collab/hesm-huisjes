@@ -37,6 +37,26 @@ Stuurt warmtepomp, boiler, dompelaar en (later) batterij op basis van EPEX-prijz
 
 Layer 1 en 2 leven vanaf dag 1. Layer 3 zit ingebouwd maar slaapt — `learning_check.py` draait dagelijks, ziet wanneer er 42 dagen aan data is, stuurt een push: *"Ik heb genoeg gezien om patronen te herkennen — wil je de leerlaag activeren?"*. Tot die tijd valt-ie nooit in de optimizer-loop.
 
+## Dispositie-engine (kwartier-besparingsmodule)
+
+Naast `optimizer/v0.py` draait per kwartier een **dispositie-engine** (`optimizer/dispositie.py`) die het verwachte PV-overschot toewijst aan de meest waardevolle bestemming. Vier bestemmingen, gerangschikt op marginale winst t.o.v. terugleveren (= baseline):
+
+1. **Zelf verbruiken** — een verschuifbare last activeren (WeHeat-tapwater, buffer-overheat, EV-laden, witgoed).
+2. **Opslaan** — accu laden (zodra die er staat).
+3. **Terugleveren** — naar het net. Baseline, gain = €0.
+4. **Curtailen** — export-limiting op de omvormer. Noodrem.
+
+Twee tariefregimes, datum-gestuurd via `regime_for()` (`optimizer/dispositie.py`):
+
+* **Saldering** (heel 2026): alleen de Energiedirect-terugleverstaffel telt. Zelf verbruiken levert ≈ €0,13/kWh op (vlakke staffel). Curtailen verliest altijd onder saldering → engine sluit het uit.
+* **No saldering** (vanaf 01-01-2027): per-kWh terugleverkosten + feed-in vergoeding bepalen `exportNet = feedIn − feedInCost`. Zelf verbruiken ≈ importprijs − exportNet. Curtailen wint pas van terugleveren als `exportNet < 0`; zelf verbruiken/opslaan verslaat het altijd. Een `DynamicPriceProvider`-hook staat klaar voor latere negatieve-prijs-curtailment uit ENTSO-E.
+
+Greedy-allocatie: kandidaten op marginale winst sorteren, vullen tot het surplus op is. De staffel-positie (cum YTD teruglevering) komt uit het ZIV ESMR5 **teruglever-register** (P1 `total_export_kwh`), niet uit de netto-stand — bijgehouden in `dispositie/cum_teruglevering` met jaarwissel-reset.
+
+Site-waarden staan in `config/site.config.ts` (Kempenstraat 3 Sittard: 10,53 kWp, ~10.500 kWh opwek, WeHeat P80, ~−2.900 kWh netto). De Python-engine spiegelt deze constanten — bij contract- of leverancierwissel houd je beide in sync (`config/tariff.energiedirect.ts` en `dispositie.py`).
+
+Beslissingen worden per kwartier naar Firestore (`disposition_decisions/`) geschreven. Het PWA-scherm **`/dispositie`** toont vandaag's besparing, de staffelpositie en de allocatie-tijdlijn live. Zolang `heat_pump.controllable=false` blijft (geen bevestigde WeHeat write-adapter) schrijft de engine adviezen en schakelt niet fysiek. Golden case: 8.100 → 6.600 kWh teruglevering = €195/jaar besparing (matcht de rekentool).
+
 ## Repo-layout
 
 ```
@@ -46,9 +66,11 @@ hesm-huisjes/
 │   │   ├── src/
 │   │   │   ├── main.py        # FastAPI entrypoint
 │   │   │   ├── optimizer/
-│   │   │   │   ├── v0.py      # rule-based decision engine
-│   │   │   │   ├── policy.py  # Layer 1 (limits) + Layer 2 (strategy)
-│   │   │   │   └── learning.py# Layer 3 (dormant tot week 6)
+│   │   │   │   ├── v0.py        # rule-based decision engine
+│   │   │   │   ├── dispositie.py# kwartier-dispositie-engine (saldering/no-saldering)
+│   │   │   │   ├── dispositie_providers.py # forecast + load providers
+│   │   │   │   ├── policy.py    # Layer 1 (limits) + Layer 2 (strategy)
+│   │   │   │   └── learning.py  # Layer 3 (dormant tot week 6)
 │   │   │   ├── connectors/    # device/data adapters
 │   │   │   ├── ai/            # Claude rationale + chat backend
 │   │   │   ├── safety/        # failsafe + watchdog
@@ -67,6 +89,11 @@ hesm-huisjes/
 │       │   └── hooks/
 │       ├── public/manifest.json   # PWA-config
 │       └── vite.config.ts
+├── config/
+│   ├── site.config.ts             # gezaghebbende site-waarden (Kempenstraat 3)
+│   └── tariff.energiedirect.ts    # terugleverstaffel + tariefconstanten
+├── types/
+│   └── dispositie.ts              # TS-types voor de dispositie-engine
 └── infra/
     ├── firebase.json
     ├── firestore.rules
