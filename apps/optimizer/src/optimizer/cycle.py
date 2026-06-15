@@ -37,11 +37,29 @@ from src.connectors.openmeteo import HourlyForecast, OpenMeteoClient
 from src.connectors.resideo import resideo_client
 from src.connectors.shelly import shelly_client
 from src.connectors.weheat import weheat_client
+from src.optimizer.dispositie import (
+    SITE_CONFIG_DEFAULT,
+    TARIFF,
+    DispositionAllocation,
+    DispositionDecision,
+    EngineConfig,
+    EngineState,
+    decide,
+    regime_for,
+)
+from src.optimizer.dispositie_providers import (
+    DEFAULT_P1_MAX_AGE_SECONDS,
+    EnergyZeroSpotPriceProvider,
+    build_loads_for_interval,
+    build_surplus_snapshot,
+)
 from src.optimizer.policy import Policy, SystemLimits
 from src.optimizer.v0 import Plan, StateInput, _LimitsView, plan_next_quarter
 from src.state.firestore import (
+    get_cum_ytd_teruglevering,
     get_policy,
     save_decision,
+    save_disposition_decision,
     save_state_snapshot,
 )
 from src.state.models import Decision, SystemState
@@ -298,6 +316,153 @@ def _persist(state: SystemState, plan: Plan, policy: Policy) -> None:
 # ---------------------------------------------------------------------------
 
 
+def _quarter_interval_start(now: datetime) -> str:
+    """Round ``now`` down to a 15-min boundary and return ISO 8601 UTC."""
+    floor_minute = (now.minute // 15) * 15
+    return now.replace(minute=floor_minute, second=0, microsecond=0).isoformat()
+
+
+_SPOT_PROVIDER = EnergyZeroSpotPriceProvider()
+
+
+async def _spot_for_interval(interval_start: str) -> float | None:
+    """Kale day-ahead-spot voor dit kwartier via EnergyZero. ``None`` = geen prijs."""
+    try:
+        return await _SPOT_PROVIDER.forecast(interval_start)
+    except Exception as exc:
+        log.warning("dispositie: spot provider raised: %s", exc)
+        return None
+
+
+def _empty_safe_mode_decision(
+    *,
+    interval_start: str,
+    regime: str,
+    cum_ytd: float,
+    spot_kwh: float | None,
+    surplus_kwh: float,
+    rationale: str,
+) -> DispositionDecision:
+    """Persistable beslissing voor safe-mode kwartieren — geen allocaties."""
+    return DispositionDecision(
+        interval_start=interval_start,
+        regime=regime,  # type: ignore[arg-type]
+        spot_price_eur_per_kwh=round(spot_kwh, 3) if spot_kwh is not None else 0.0,
+        forecast_surplus_kwh=round(surplus_kwh, 3),
+        cum_ytd_teruglevering_kwh=round(cum_ytd, 3),
+        allocations=[],
+        expected_saving_eur=0.0,
+        rationale=rationale,
+        safe_mode=True,
+    )
+
+
+async def _run_dispositie(
+    state_input: StateInput,
+    gathered: dict[str, Any],
+) -> DispositionDecision | None:
+    """Bereken één dispositie-beslissing en persist hem.
+
+    Twee staleness-paden zetten ``safe_mode=True``:
+      1. Geen spot-prijs (EnergyZero gat) → schrijft beslissing zonder allocaties.
+      2. P1 ouder dan ``DEFAULT_P1_MAX_AGE_SECONDS`` → valt terug op Growatt-
+         schatting maar markeert safe_mode zodat een actuatie-laag niet schakelt.
+    """
+    hw: P1MeterReading | None = gathered.get("homewizard")
+    export_register_kwh = float(hw.total_export_kwh) if hw and hw.total_export_kwh is not None else 0.0
+
+    try:
+        cum_ytd = get_cum_ytd_teruglevering(export_register_kwh, now=state_input.timestamp)
+    except Exception as exc:
+        log.warning("dispositie: cum YTD lookup failed: %s — falling back to 0", exc)
+        cum_ytd = 0.0
+
+    interval_start = _quarter_interval_start(state_input.timestamp)
+
+    # Surplus: prefer P1-active_power_w, fallback naar Growatt-derived schatting.
+    snapshot = build_surplus_snapshot(
+        p1_active_power_w=float(hw.active_power_w) if hw and hw.active_power_w is not None else None,
+        p1_captured_at=hw.captured_at if hw else None,
+        pv_power_w=state_input.pv_power,
+        house_load_w=state_input.house_load,
+        now=state_input.timestamp,
+        max_age_seconds=DEFAULT_P1_MAX_AGE_SECONDS,
+    )
+
+    # Zonnigheid heuristiek: substantiële PV-output ⇒ buffer-overheat capacity vrijgeven.
+    is_sunny = state_input.pv_power >= 0.3 * SITE_CONFIG_DEFAULT.pv_kwp * 1000
+    loads = build_loads_for_interval(SITE_CONFIG_DEFAULT, state_input.timestamp, is_sunny=is_sunny)
+
+    cfg = EngineConfig(
+        regime=regime_for(state_input.timestamp),
+        site=SITE_CONFIG_DEFAULT,
+        tariff=TARIFF,
+    )
+
+    spot = await _spot_for_interval(interval_start)
+
+    # SAFE MODE — geen spot-prijs: schrijven met lege allocaties; nooit schakelen.
+    if spot is None:
+        decision: DispositionDecision = _empty_safe_mode_decision(
+            interval_start=interval_start,
+            regime=cfg.regime,
+            cum_ytd=cum_ytd,
+            spot_kwh=None,
+            surplus_kwh=snapshot.surplus_kwh,
+            rationale=(
+                "safe_mode: geen day-ahead-prijs beschikbaar — engine schrijft advies, "
+                "schakelt niets."
+            ),
+        )
+    else:
+        decision = decide(
+            interval_start=interval_start,
+            forecast_surplus_kwh=snapshot.surplus_kwh,
+            loads=loads,
+            state=EngineState(cum_ytd_teruglevering_kwh=cum_ytd),
+            cfg=cfg,
+            spot_price_eur_per_kwh=spot,
+        )
+        if snapshot.stale:
+            # P1 stale → engine draait advies, maar safe_mode blokkeert toekomstige actuatie.
+            decision.safe_mode = True
+            stale_note = (
+                f" [safe_mode: P1 stale "
+                f"({snapshot.p1_age_seconds:.1f}s) — bron={snapshot.source}]"
+                if snapshot.p1_age_seconds is not None
+                else f" [safe_mode: P1 ontbreekt — bron={snapshot.source}]"
+            )
+            decision = DispositionDecision(
+                interval_start=decision.interval_start,
+                regime=decision.regime,
+                spot_price_eur_per_kwh=decision.spot_price_eur_per_kwh,
+                forecast_surplus_kwh=decision.forecast_surplus_kwh,
+                cum_ytd_teruglevering_kwh=decision.cum_ytd_teruglevering_kwh,
+                allocations=list[DispositionAllocation](decision.allocations),
+                expected_saving_eur=decision.expected_saving_eur,
+                rationale=decision.rationale + stale_note,
+                safe_mode=True,
+            )
+
+    try:
+        save_disposition_decision(decision)
+    except Exception as exc:
+        log.warning("dispositie: persist failed: %s", exc)
+
+    log.info(
+        "dispositie [%s%s]: spot=%s surplus=%.3f kWh (%s) cum YTD=%.1f kWh → €%.2f — %s",
+        cfg.regime,
+        " · SAFE" if decision.safe_mode else "",
+        f"{spot:+.3f}" if spot is not None else "—",
+        decision.forecast_surplus_kwh,
+        snapshot.source,
+        decision.cum_ytd_teruglevering_kwh,
+        decision.expected_saving_eur,
+        decision.rationale,
+    )
+    return decision
+
+
 async def run_cycle() -> Plan:
     """One end-to-end optimizer cycle. Returns the Plan that was applied."""
     policy = get_policy()
@@ -315,10 +480,20 @@ async def run_cycle() -> Plan:
 
     await _apply_plan(plan, policy)
     _persist(persistable, plan, policy)
+
+    # Dispositie-engine draait ná de v0-plan en schrijft ZIJN beslissing apart
+    # weg. Geen fysieke actuatie: zolang heat_pump.controllable=False blijft de
+    # WeHeat-aansturing alleen advies — de Shelly-relay is al door _apply_plan
+    # gezet op basis van v0.
+    try:
+        await _run_dispositie(state_input, gathered)
+    except Exception as exc:
+        log.warning("dispositie: cycle stage failed (non-fatal): %s", exc)
+
     return plan
 
 
-__all__ = ["_compose_state", "_gather_all", "run_cycle"]
+__all__ = ["_compose_state", "_gather_all", "_run_dispositie", "run_cycle"]
 
 
 # Suppress "imported but unused" for things we deliberately re-export

@@ -225,24 +225,57 @@ gcloud logging read 'resource.type=cloud_run_revision \
 
 ## Open decisions deferred to later PRs
 
-### HomeWizard P1 — local-API exposure
+### HomeWizard P1 — local-API exposure (LAN-only)
 
-HomeWizard has no public cloud API; the connector targets the local v1
-API. To keep Cloud Run reachable to the meter, expose the local IP via
-a tunnel from a small always-on device.
+HomeWizard publiceert **geen** publieke cloud-API; de officiële docs
+([api-documentation.homewizard.com](https://api-documentation.homewizard.com/docs/introduction/))
+beperken access tot "the same Wi-Fi network as the device". Voor Cloud Run
+(HESM is cloud-only) betekent dit dat we het apparaat moeten exposen via
+een tunnel vanaf een klein altijd-aan kastje thuis.
 
-**Recommended:** Cloudflare Tunnel + Cloudflare Access service-token.
-After setup, store the URL and headers as Secret Manager secrets and
-mount them in `cloudbuild.yaml`:
+Dit is technisch een doorbreking van het "cloud-only"-principe (zie CLAUDE.md
+anti-pattern "Don't add an edge device"). De afspraak: het kastje runt
+ALLEEN een dom tunnel-proces (Cloudflare Tunnel of Tailscale), géén
+optimizer-logica. Bij uitval valt de cycle terug naar **safe mode** (zie
+``optimizer/dispositie_providers.py`` → ``build_surplus_snapshot`` met
+30 s staleness-grens) en schakelt niets.
+
+**Aanbevolen:** Cloudflare Tunnel + Cloudflare Access service-token. Na setup
+sla je de URL + headers op als Secret Manager-secrets en mount je ze in
+`cloudbuild.yaml`:
 
 ```yaml
 - --set-env-vars=...,HOMEWIZARD_BASE_URL=https://hwz.huisjes.dev
 - --set-secrets=...,HOMEWIZARD_HEADER_CF_ACCESS_CLIENT_ID=hwz-cf-id:latest,HOMEWIZARD_HEADER_CF_ACCESS_CLIENT_SECRET=hwz-cf-secret:latest
 ```
 
-Alternatives: Tailscale Funnel (`*.ts.net`), or swap to Tibber Pulse if
-Roel switches suppliers — that gives a real cloud API and the tunnel
-device disappears.
+Alternatieven: Tailscale Funnel (`*.ts.net`), of een dedicated push-agent
+die elke 15 s een measurement naar Firestore schrijft (zou een aparte PR
+worden, niet onderdeel van de dispositie-PR-reeks).
+
+**P1-splitter:** sinds Zonneplan dynamisch (08-07-2026) zit er een
+P1-splitter tussen ZIV ESMR5 en de Zonneplan-meter; de HomeWizard hangt
+parallel op die splitter. Praktisch geen impact op het uitlezen — beide
+devices halen hun eigen telegram.
+
+### EnergyZero — kale day-ahead-spot (publieke API, geen auth)
+
+Sinds 08-07-2026 draait het contract op Zonneplan dynamisch, dat onder
+de motorkap de EnergyZero-prijsfeed gebruikt. De dispositie-engine
+spreekt EnergyZero direct aan voor de kale spot-prijs:
+
+```
+GET https://public.api.energyzero.nl/public/v1/prices
+    ?energyType=ENERGY_TYPE_ELECTRICITY
+    &date=DD-MM-YYYY
+    &interval=INTERVAL_QUARTER
+```
+
+Geen auth-token, geen Secret Manager-entry. Optioneel kan `ENERGYZERO_BASE_URL`
+geset worden in `cloudbuild.yaml` voor staging-mirroring; default blijft
+de publieke endpoint. ENTSO-E (PR3) blijft beschikbaar als uur-fallback,
+maar wordt niet meer door de dispositie-engine gebruikt — daar zit nu
+EnergyZero met native kwartier-resolutie.
 
 ### ENTSO-E API token
 

@@ -37,6 +37,43 @@ Stuurt warmtepomp, boiler, dompelaar en (later) batterij op basis van EPEX-prijz
 
 Layer 1 en 2 leven vanaf dag 1. Layer 3 zit ingebouwd maar slaapt — `learning_check.py` draait dagelijks, ziet wanneer er 42 dagen aan data is, stuurt een push: *"Ik heb genoeg gezien om patronen te herkennen — wil je de leerlaag activeren?"*. Tot die tijd valt-ie nooit in de optimizer-loop.
 
+## Dispositie-engine (kwartier-besparingsmodule)
+
+Naast `optimizer/v0.py` draait per kwartier een **dispositie-engine** (`optimizer/dispositie.py`) die het verwachte PV-overschot toewijst aan de meest waardevolle bestemming. Vier bestemmingen, gerangschikt op marginale winst t.o.v. terugleveren (= baseline):
+
+1. **Zelf verbruiken** — een verschuifbare last activeren (WeHeat-tapwater, buffer-overheat, EV-laden, witgoed).
+2. **Opslaan** — accu laden (zodra die er staat).
+3. **Terugleveren** — naar het net. Baseline, gain = €0.
+4. **Curtailen** — export-limiting op de omvormer. Noodrem.
+
+Sinds 08-07-2026 draait het huis op **Zonneplan dynamisch** (`config/site.config.ts` → `TARIFF_CONFIG`). De engine rekent per kwartier met de kale EPEX-spot (uit een `SpotPriceProvider`) plus de Zonneplan-componenten:
+
+```
+importPrice(t) = spot(t) + inkoopvergoeding + energiebelasting
+exportValue(t) = spot(t) + terugleveropslag
+                 + (overdag & (spot+opslag)>0 & cumYtd<7500 ? 10% × spot : 0)   // Zonnebonus
+                 + (saldering.active ? energiebelasting : 0)                    // restitutie binnen saldeerbereik
+```
+
+Marginale winst t.o.v. terugleveren: `self_consume = importPrice − exportValue`, `store = importPrice·rte − exportValue`, `export = 0` (baseline), `curtail = −exportValue` (positief bij negatieve marktprijs).
+
+Twee tariefregimes, datum-gestuurd via `regime_for()`:
+
+* **Saldering** (t/m 2026): energiebelasting komt terug op je export binnen het saldeerbereik → `exportValue` is hoog, `self_consume`-winst is alleen de Zonneplan-inkoopvergoeding (~€0,025/kWh).
+* **No saldering** (vanaf 01-01-2027): `exportValue` zonder energiebelasting-restitutie → `self_consume`-winst stijgt naar ~€0,16/kWh (energiebelasting + inkoopvergoeding) onafhankelijk van de spot. Curtail wint pas van export bij negatieve marktprijs; self_consume verslaat dat economisch zelden, behalve bij extreem negatieve spot.
+
+**Zonnebonus** is een Zonneplan-bonus: +10% over de spot bovenop de gewone terugleververgoeding, alleen tussen 10:00 en 15:00, alleen wanneer `(spot + terugleveropslag) > 0`, en capped op 7.500 kWh teruglevering per kalenderjaar. De cum YTD-teruglevering komt uit het ZIV ESMR5 **teruglever-register** (P1 `total_export_kwh`), niet uit de netto-stand — bijgehouden in `dispositie/cum_teruglevering` met jaarwissel-reset.
+
+**Data-bronnen** (beide live):
+
+* **Spot:** publieke EnergyZero-kwartierfeed (`https://public.api.energyzero.nl/public/v1/prices`, geen auth). Zit onder Zonneplan dynamisch en levert native kwartier-resolutie sinds EPEX op 01-10-2025 op kwartier ging. De `base`-stream is kale spot (excl. btw, excl. opslag); de engine telt zelf de Zonneplan-componenten erbij.
+* **Surplus:** HomeWizard P1 `active_power_w` (negatief = export). HomeWizard heeft géén publieke cloud-API (zie [docs](https://api-documentation.homewizard.com/docs/introduction/)) — een lokaal kastje met Cloudflare Tunnel of Tailscale exposeert het apparaat naar Cloud Run. Zie `infra/SETUP.md` voor de tunnel-keuze. Bij P1-staleness (>30 s oud) of -ontbreken valt de engine terug op een Growatt-afgeleide schatting (`pv_power − basislast`).
+* **YTD-teruglevering:** uit het P1 `total_power_export_kwh`-register, bijgehouden in `dispositie/cum_teruglevering` met jaarwissel-reset.
+
+**Safe mode** — de cycle schakelt naar `safe_mode=True` (engine schrijft alleen advies, schakelt nooit) zodra één van de twee bronnen ontbreekt: geen spot voor het kwartier, of P1-meting ouder dan 30 s. Beslissingen worden per kwartier naar Firestore (`disposition_decisions/`) geschreven met een expliciete `safe_mode`-vlag. Het PWA-scherm **`/dispositie`** toont vandaag's besparing, de actuele spot, de Zonnebonus-ruimte en de allocatie-tijdlijn live.
+
+De `controllable`-vlag in `config/site.config.ts` blijft op `false` totdat we enkele dagen aan stabiele live-data hebben binnen — de schakeling-PR is bewust een vervolgstap. `config/tariff.energiedirect.ts` blijft als historische referentie (contract afgelopen 07-07-2026) — niet meer in gebruik door de engine.
+
 ## Repo-layout
 
 ```
@@ -46,9 +83,11 @@ hesm-huisjes/
 │   │   ├── src/
 │   │   │   ├── main.py        # FastAPI entrypoint
 │   │   │   ├── optimizer/
-│   │   │   │   ├── v0.py      # rule-based decision engine
-│   │   │   │   ├── policy.py  # Layer 1 (limits) + Layer 2 (strategy)
-│   │   │   │   └── learning.py# Layer 3 (dormant tot week 6)
+│   │   │   │   ├── v0.py        # rule-based decision engine
+│   │   │   │   ├── dispositie.py# kwartier-dispositie-engine (saldering/no-saldering)
+│   │   │   │   ├── dispositie_providers.py # forecast + load providers
+│   │   │   │   ├── policy.py    # Layer 1 (limits) + Layer 2 (strategy)
+│   │   │   │   └── learning.py  # Layer 3 (dormant tot week 6)
 │   │   │   ├── connectors/    # device/data adapters
 │   │   │   ├── ai/            # Claude rationale + chat backend
 │   │   │   ├── safety/        # failsafe + watchdog
@@ -67,6 +106,11 @@ hesm-huisjes/
 │       │   └── hooks/
 │       ├── public/manifest.json   # PWA-config
 │       └── vite.config.ts
+├── config/
+│   ├── site.config.ts             # gezaghebbende site-waarden (Kempenstraat 3)
+│   └── tariff.energiedirect.ts    # terugleverstaffel + tariefconstanten
+├── types/
+│   └── dispositie.ts              # TS-types voor de dispositie-engine
 └── infra/
     ├── firebase.json
     ├── firestore.rules

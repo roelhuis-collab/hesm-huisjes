@@ -28,13 +28,21 @@ export default function Advanced() {
             <ChevronLeft size={14} /> simpel
           </Link>
           <h1 className="text-sm font-light tracking-wide">Advanced</h1>
-          <Link
-            to="/settings"
-            className="text-slate-500 hover:text-slate-200"
-            aria-label="Instellingen"
-          >
-            <SettingsIcon size={18} />
-          </Link>
+          <div className="flex items-center gap-4">
+            <Link
+              to="/dispositie"
+              className="text-[10px] uppercase tracking-widest text-slate-500 hover:text-amber-400"
+            >
+              Dispositie
+            </Link>
+            <Link
+              to="/settings"
+              className="text-slate-500 hover:text-slate-200"
+              aria-label="Instellingen"
+            >
+              <SettingsIcon size={18} />
+            </Link>
+          </div>
         </div>
       </header>
 
