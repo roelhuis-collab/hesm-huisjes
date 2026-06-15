@@ -64,7 +64,15 @@ Twee tariefregimes, datum-gestuurd via `regime_for()`:
 
 **Zonnebonus** is een Zonneplan-bonus: +10% over de spot bovenop de gewone terugleververgoeding, alleen tussen 10:00 en 15:00, alleen wanneer `(spot + terugleveropslag) > 0`, en capped op 7.500 kWh teruglevering per kalenderjaar. De cum YTD-teruglevering komt uit het ZIV ESMR5 **teruglever-register** (P1 `total_export_kwh`), niet uit de netto-stand — bijgehouden in `dispositie/cum_teruglevering` met jaarwissel-reset.
 
-Beslissingen worden per kwartier naar Firestore (`disposition_decisions/`) geschreven. Het PWA-scherm **`/dispositie`** toont vandaag's besparing, de actuele spot, de Zonnebonus-ruimte en de allocatie-tijdlijn live. Zolang `heat_pump.controllable=false` blijft (geen bevestigde WeHeat write-adapter) schrijft de engine adviezen en schakelt niet fysiek. `FlatDayNightSpotPriceProvider` is voorlopig de stub-spot-bron; echte EPEX-koppeling (per-kwartier) staat op de roadmap. `config/tariff.energiedirect.ts` blijft als historische referentie van de Energiedirect-staffel (contract afgelopen 07-07-2026) — niet meer in gebruik door de engine.
+**Data-bronnen** (beide live):
+
+* **Spot:** publieke EnergyZero-kwartierfeed (`https://public.api.energyzero.nl/public/v1/prices`, geen auth). Zit onder Zonneplan dynamisch en levert native kwartier-resolutie sinds EPEX op 01-10-2025 op kwartier ging. De `base`-stream is kale spot (excl. btw, excl. opslag); de engine telt zelf de Zonneplan-componenten erbij.
+* **Surplus:** HomeWizard P1 `active_power_w` (negatief = export). HomeWizard heeft géén publieke cloud-API (zie [docs](https://api-documentation.homewizard.com/docs/introduction/)) — een lokaal kastje met Cloudflare Tunnel of Tailscale exposeert het apparaat naar Cloud Run. Zie `infra/SETUP.md` voor de tunnel-keuze. Bij P1-staleness (>30 s oud) of -ontbreken valt de engine terug op een Growatt-afgeleide schatting (`pv_power − basislast`).
+* **YTD-teruglevering:** uit het P1 `total_power_export_kwh`-register, bijgehouden in `dispositie/cum_teruglevering` met jaarwissel-reset.
+
+**Safe mode** — de cycle schakelt naar `safe_mode=True` (engine schrijft alleen advies, schakelt nooit) zodra één van de twee bronnen ontbreekt: geen spot voor het kwartier, of P1-meting ouder dan 30 s. Beslissingen worden per kwartier naar Firestore (`disposition_decisions/`) geschreven met een expliciete `safe_mode`-vlag. Het PWA-scherm **`/dispositie`** toont vandaag's besparing, de actuele spot, de Zonnebonus-ruimte en de allocatie-tijdlijn live.
+
+De `controllable`-vlag in `config/site.config.ts` blijft op `false` totdat we enkele dagen aan stabiele live-data hebben binnen — de schakeling-PR is bewust een vervolgstap. `config/tariff.energiedirect.ts` blijft als historische referentie (contract afgelopen 07-07-2026) — niet meer in gebruik door de engine.
 
 ## Repo-layout
 

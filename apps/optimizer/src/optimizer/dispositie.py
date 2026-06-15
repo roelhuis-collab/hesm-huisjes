@@ -145,6 +145,8 @@ class DispositionDecision:
     allocations: list[DispositionAllocation]
     expected_saving_eur: float
     rationale: str
+    safe_mode: bool = False
+    """``True`` als data-input stale of ontbrekend was — engine schrijft alleen advies, schakelt niet."""
 
     def to_firestore(self) -> dict[str, Any]:
         return {
@@ -164,6 +166,7 @@ class DispositionDecision:
             ],
             "expected_saving_eur": self.expected_saving_eur,
             "rationale": self.rationale,
+            "safe_mode": self.safe_mode,
         }
 
 

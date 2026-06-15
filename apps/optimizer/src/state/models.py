@@ -289,6 +289,7 @@ class DispositionDecisionDTO(BaseModel):
     allocations: list[DispositionAllocationDTO] = Field(default_factory=list)
     expected_saving_eur: float
     rationale: str
+    safe_mode: bool = Field(default=False, description="P1 stale/missing of spot ontbreekt → geen schakeling")
 
     @classmethod
     def from_dataclass(cls, src: DispositionDecision) -> DispositionDecisionDTO:
@@ -301,6 +302,7 @@ class DispositionDecisionDTO(BaseModel):
             allocations=[DispositionAllocationDTO.from_dataclass(a) for a in src.allocations],
             expected_saving_eur=src.expected_saving_eur,
             rationale=src.rationale,
+            safe_mode=src.safe_mode,
         )
 
     def to_dataclass(self) -> DispositionDecision:
@@ -314,6 +316,7 @@ class DispositionDecisionDTO(BaseModel):
             allocations=[a.to_dataclass() for a in self.allocations],
             expected_saving_eur=self.expected_saving_eur,
             rationale=self.rationale,
+            safe_mode=self.safe_mode,
         )
 
 
