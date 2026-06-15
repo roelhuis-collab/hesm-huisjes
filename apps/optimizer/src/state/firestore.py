@@ -41,11 +41,13 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Any
 
+from src.optimizer.dispositie import DispositionDecision
 from src.optimizer.learning import ActivationStatus, LearnedProfile
 from src.optimizer.policy import Policy, default_policy
 from src.state.models import (
     ActivationStatusDTO,
     Decision,
+    DispositionDecisionDTO,
     FCMToken,
     LearnedProfileDTO,
     SystemState,
@@ -68,6 +70,10 @@ LEARNED_PROFILE_DOC = "current"
 STATE_SNAPSHOTS_COLLECTION = "state_snapshots"
 DECISIONS_COLLECTION = "decisions"
 FCM_TOKENS_COLLECTION = "fcm_tokens"
+
+DISPOSITION_DECISIONS_COLLECTION = "disposition_decisions"
+DISPOSITIE_COLLECTION = "dispositie"
+CUM_TERUGLEVERING_DOC = "cum_teruglevering"
 
 
 # Client management -----------------------------------------------------------
@@ -218,6 +224,63 @@ def get_data_start_date() -> datetime | None:
 def save_decision(decision: Decision) -> None:
     """Persist one optimizer cycle's decision. Doc id is auto-generated."""
     _db().collection(DECISIONS_COLLECTION).add(decision.model_dump(mode="json"))
+
+
+# Dispositie-engine: per-kwartier beslissingen + cum YTD teruglevering ---------
+
+
+def save_disposition_decision(decision: DispositionDecision) -> None:
+    """Persist één dispositie-beslissing (auto-id, met interval_start veld)."""
+    payload = DispositionDecisionDTO.from_dataclass(decision).model_dump(mode="json")
+    _db().collection(DISPOSITION_DECISIONS_COLLECTION).add(payload)
+
+
+def get_recent_disposition_decisions(hours: int = 24) -> list[DispositionDecision]:
+    """Recente dispositie-beslissingen (laatste N uur), nieuwste eerst."""
+    cutoff = (datetime.now() - timedelta(hours=hours)).isoformat()
+    coll = _db().collection(DISPOSITION_DECISIONS_COLLECTION).where("interval_start", ">=", cutoff)
+    docs = [d.to_dict() or {} for d in coll.stream()]
+    docs.sort(key=lambda d: str(d.get("interval_start", "")), reverse=True)
+    return [DispositionDecisionDTO.model_validate(d).to_dataclass() for d in docs]
+
+
+def get_cum_ytd_teruglevering(register_kwh: float, *, now: datetime | None = None) -> float:
+    """Bepaal cumulatieve teruglevering sinds 1 januari.
+
+    Bron is de ZIV ESMR5 teruglever-register-stand (P1 ``total_export_kwh``),
+    NIET de netto-positie. We slaan de jaar-baseline op in
+    ``dispositie/cum_teruglevering`` en geven het verschil terug. Bij
+    jaarwissel zetten we de baseline opnieuw op de huidige stand.
+    """
+    moment = now or datetime.now()
+    ref = _db().collection(DISPOSITIE_COLLECTION).document(CUM_TERUGLEVERING_DOC)
+    snap = ref.get()
+    data: dict[str, Any] = (snap.to_dict() if snap.exists else {}) or {}
+    stored_year = int(data.get("year") or 0)
+    baseline = float(data.get("baseline_register_kwh") or register_kwh)
+
+    if stored_year != moment.year:
+        # Nieuwe jaarteller: huidige meterstand wordt de jaar-baseline.
+        baseline = register_kwh
+        ref.set(
+            {
+                "year": moment.year,
+                "baseline_register_kwh": baseline,
+                "last_register_kwh": register_kwh,
+                "updated_at": moment.isoformat(),
+            }
+        )
+    else:
+        ref.set(
+            {
+                "year": moment.year,
+                "baseline_register_kwh": baseline,
+                "last_register_kwh": register_kwh,
+                "updated_at": moment.isoformat(),
+            }
+        )
+
+    return max(0.0, register_kwh - baseline)
 
 
 # FCM tokens ------------------------------------------------------------------

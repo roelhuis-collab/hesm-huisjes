@@ -29,6 +29,12 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from src.optimizer.dispositie import (
+    Disposition,
+    DispositionAllocation,
+    DispositionDecision,
+    TariffRegime,
+)
 from src.optimizer.learning import (
     ActivationStatus,
     DailyPattern,
@@ -237,6 +243,75 @@ class ActivationStatusDTO(BaseModel):
 
     def to_dataclass(self) -> ActivationStatus:
         return ActivationStatus(**self.model_dump())
+
+
+# ---------------------------------------------------------------------------
+# Dispositie-engine — per-kwartier allocatie van PV-overschot
+# ---------------------------------------------------------------------------
+
+
+class DispositionAllocationDTO(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    disposition: Literal["self_consume", "store", "export", "curtail"]
+    load_id: str | None = None
+    kwh: float
+    marginal_gain_eur_per_kwh: float
+
+    @classmethod
+    def from_dataclass(cls, src: DispositionAllocation) -> DispositionAllocationDTO:
+        return cls(
+            disposition=src.disposition.value,
+            load_id=src.load_id,
+            kwh=src.kwh,
+            marginal_gain_eur_per_kwh=src.marginal_gain_eur_per_kwh,
+        )
+
+    def to_dataclass(self) -> DispositionAllocation:
+        return DispositionAllocation(
+            disposition=Disposition(self.disposition),
+            load_id=self.load_id,
+            kwh=self.kwh,
+            marginal_gain_eur_per_kwh=self.marginal_gain_eur_per_kwh,
+        )
+
+
+class DispositionDecisionDTO(BaseModel):
+    """Persistentie-vorm van ``DispositionDecision`` uit ``optimizer/dispositie.py``."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    interval_start: str = Field(description="ISO 8601 kwartiergrens, UTC")
+    regime: Literal["saldering", "no_saldering"]
+    forecast_surplus_kwh: float
+    cum_ytd_teruglevering_kwh: float
+    allocations: list[DispositionAllocationDTO] = Field(default_factory=list)
+    expected_saving_eur: float
+    rationale: str
+
+    @classmethod
+    def from_dataclass(cls, src: DispositionDecision) -> DispositionDecisionDTO:
+        return cls(
+            interval_start=src.interval_start,
+            regime=src.regime,
+            forecast_surplus_kwh=src.forecast_surplus_kwh,
+            cum_ytd_teruglevering_kwh=src.cum_ytd_teruglevering_kwh,
+            allocations=[DispositionAllocationDTO.from_dataclass(a) for a in src.allocations],
+            expected_saving_eur=src.expected_saving_eur,
+            rationale=src.rationale,
+        )
+
+    def to_dataclass(self) -> DispositionDecision:
+        regime: TariffRegime = self.regime
+        return DispositionDecision(
+            interval_start=self.interval_start,
+            regime=regime,
+            forecast_surplus_kwh=self.forecast_surplus_kwh,
+            cum_ytd_teruglevering_kwh=self.cum_ytd_teruglevering_kwh,
+            allocations=[a.to_dataclass() for a in self.allocations],
+            expected_saving_eur=self.expected_saving_eur,
+            rationale=self.rationale,
+        )
 
 
 # ---------------------------------------------------------------------------

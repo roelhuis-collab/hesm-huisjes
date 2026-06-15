@@ -29,6 +29,7 @@ schrijft adviezen, schakelt nog niet fysiek.
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
+from datetime import date, datetime
 from enum import StrEnum
 from typing import Any, Literal, Protocol
 
@@ -175,6 +176,18 @@ class LoadProvider(Protocol):
     async def available_loads(self, interval_start: str) -> list[DeferrableLoad]: ...
 
 
+class DynamicPriceProvider(Protocol):
+    """Hook voor latere dynamische-prijs-bron (negatieve-prijs-curtailment).
+
+    Een implementatie kan bv. de ENTSO-E-prijs voor het komende kwartier
+    teruggeven; de engine verwerkt deze ALLEEN in regime 'no_saldering'
+    en alleen om export_net te overrulen wanneer de spotprijs negatief is.
+    Default: ``None`` → engine gebruikt de staffel/feed-in-vergoeding.
+    """
+
+    async def negative_export_value_eur_per_kwh(self, interval_start: str) -> float | None: ...
+
+
 # ---------------------------------------------------------------------------
 # Energiedirect-staffel + tariefconstanten (gespiegeld uit TS)
 # ---------------------------------------------------------------------------
@@ -232,6 +245,16 @@ TARIFF = TariffConfig(
 )
 
 # Spiegelt SITE_CONFIG uit /config/site.config.ts (Kempenstraat 3, 6137 KL Sittard).
+REGIME_SWITCH_DATE = date(2027, 1, 1)
+
+
+def regime_for(when: date | datetime) -> TariffRegime:
+    """Saldering vervalt per 01-01-2027 (ACM-besluit). Datum-gestuurde switch."""
+    if isinstance(when, datetime):
+        when = when.date()
+    return "saldering" if when < REGIME_SWITCH_DATE else "no_saldering"
+
+
 SITE_CONFIG_DEFAULT = SiteConfig(
     pv_kwp=10.53,
     annual_pv_yield_kwh=10_500,
@@ -493,6 +516,7 @@ def decide(
 
 __all__ = [
     "ENERGIEDIRECT_STAFFEL",
+    "REGIME_SWITCH_DATE",
     "SITE_CONFIG_DEFAULT",
     "TARIFF",
     "BatteryConfig",
@@ -500,6 +524,7 @@ __all__ = [
     "Disposition",
     "DispositionAllocation",
     "DispositionDecision",
+    "DynamicPriceProvider",
     "EngineConfig",
     "EngineState",
     "EvChargerConfig",
@@ -514,6 +539,7 @@ __all__ = [
     "decide",
     "export_room_kwh",
     "marginal_staffel_cost",
+    "regime_for",
     "staffel_cost_at",
 ]
 

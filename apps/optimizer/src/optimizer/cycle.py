@@ -37,11 +37,27 @@ from src.connectors.openmeteo import HourlyForecast, OpenMeteoClient
 from src.connectors.resideo import resideo_client
 from src.connectors.shelly import shelly_client
 from src.connectors.weheat import weheat_client
+from src.optimizer.dispositie import (
+    ENERGIEDIRECT_STAFFEL,
+    SITE_CONFIG_DEFAULT,
+    TARIFF,
+    DispositionDecision,
+    EngineConfig,
+    EngineState,
+    decide,
+    regime_for,
+)
+from src.optimizer.dispositie_providers import (
+    build_loads_for_interval,
+    quarter_forecast_kwh,
+)
 from src.optimizer.policy import Policy, SystemLimits
 from src.optimizer.v0 import Plan, StateInput, _LimitsView, plan_next_quarter
 from src.state.firestore import (
+    get_cum_ytd_teruglevering,
     get_policy,
     save_decision,
+    save_disposition_decision,
     save_state_snapshot,
 )
 from src.state.models import Decision, SystemState
@@ -298,6 +314,69 @@ def _persist(state: SystemState, plan: Plan, policy: Policy) -> None:
 # ---------------------------------------------------------------------------
 
 
+def _quarter_interval_start(now: datetime) -> str:
+    """Round ``now`` down to a 15-min boundary and return ISO 8601 UTC."""
+    floor_minute = (now.minute // 15) * 15
+    return now.replace(minute=floor_minute, second=0, microsecond=0).isoformat()
+
+
+def _run_dispositie(
+    state_input: StateInput,
+    gathered: dict[str, Any],
+) -> DispositionDecision | None:
+    """Bereken één dispositie-beslissing en persist hem.
+
+    Faalt soft: zonder export-register (P1 export-stand) staan we cum YTD op 0
+    en draaien we alsnog de engine. Onder saldering verandert de gain niet door
+    de staffelpositie (vlakke €0,13/kWh), dus dat is acceptabel als fallback.
+    """
+    hw: P1MeterReading | None = gathered.get("homewizard")
+    export_register_kwh = float(hw.total_export_kwh) if hw and hw.total_export_kwh is not None else 0.0
+
+    try:
+        cum_ytd = get_cum_ytd_teruglevering(export_register_kwh, now=state_input.timestamp)
+    except Exception as exc:
+        log.warning("dispositie: cum YTD lookup failed: %s — falling back to 0", exc)
+        cum_ytd = 0.0
+
+    interval_start = _quarter_interval_start(state_input.timestamp)
+    surplus_kwh = quarter_forecast_kwh(state_input.pv_power, state_input.house_load)
+
+    # Zonnigheid heuristiek: substantiële PV-output ⇒ buffer-overheat capacity vrijgeven.
+    is_sunny = state_input.pv_power >= 0.3 * SITE_CONFIG_DEFAULT.pv_kwp * 1000
+    loads = build_loads_for_interval(SITE_CONFIG_DEFAULT, state_input.timestamp, is_sunny=is_sunny)
+
+    cfg = EngineConfig(
+        regime=regime_for(state_input.timestamp),
+        site=SITE_CONFIG_DEFAULT,
+        tariff=TARIFF,
+        staffel=ENERGIEDIRECT_STAFFEL,
+    )
+
+    decision = decide(
+        interval_start=interval_start,
+        forecast_surplus_kwh=surplus_kwh,
+        loads=loads,
+        state=EngineState(cum_ytd_teruglevering_kwh=cum_ytd),
+        cfg=cfg,
+    )
+
+    try:
+        save_disposition_decision(decision)
+    except Exception as exc:
+        log.warning("dispositie: persist failed: %s", exc)
+
+    log.info(
+        "dispositie [%s]: surplus=%.3f kWh, cum YTD=%.1f kWh → besparing €%.2f — %s",
+        cfg.regime,
+        decision.forecast_surplus_kwh,
+        decision.cum_ytd_teruglevering_kwh,
+        decision.expected_saving_eur,
+        decision.rationale,
+    )
+    return decision
+
+
 async def run_cycle() -> Plan:
     """One end-to-end optimizer cycle. Returns the Plan that was applied."""
     policy = get_policy()
@@ -315,10 +394,20 @@ async def run_cycle() -> Plan:
 
     await _apply_plan(plan, policy)
     _persist(persistable, plan, policy)
+
+    # Dispositie-engine draait ná de v0-plan en schrijft ZIJN beslissing apart
+    # weg. Geen fysieke actuatie: zolang heat_pump.controllable=False blijft de
+    # WeHeat-aansturing alleen advies — de Shelly-relay is al door _apply_plan
+    # gezet op basis van v0.
+    try:
+        _run_dispositie(state_input, gathered)
+    except Exception as exc:
+        log.warning("dispositie: cycle stage failed (non-fatal): %s", exc)
+
     return plan
 
 
-__all__ = ["_compose_state", "_gather_all", "run_cycle"]
+__all__ = ["_compose_state", "_gather_all", "_run_dispositie", "run_cycle"]
 
 
 # Suppress "imported but unused" for things we deliberately re-export
