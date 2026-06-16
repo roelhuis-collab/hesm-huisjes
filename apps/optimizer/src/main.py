@@ -42,6 +42,7 @@ from typing import Any, Literal
 
 import firebase_admin
 from fastapi import FastAPI, Header, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
@@ -87,6 +88,27 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
 
 app = FastAPI(title="HESM by Huisjes — optimizer", lifespan=lifespan)
+
+# Browser-clients (PWA op Netlify) doen cross-origin fetches naar Cloud Run.
+# Zonder CORS-middleware blokt Safari/Chrome al de preflight (405) en zie je
+# in de chat-UI alleen "TypeError: Load failed". DASHBOARD_BASE_URL komt
+# uit cloudbuild.yaml en is in productie hesm-huisjes.netlify.app.
+_ALLOWED_ORIGINS = [
+    o.strip()
+    for o in os.environ.get(
+        "DASHBOARD_BASE_URL", "https://hesm-huisjes.netlify.app"
+    ).split(",")
+    if o.strip()
+]
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=_ALLOWED_ORIGINS,
+    allow_credentials=True,
+    allow_methods=["GET", "POST", "PUT", "OPTIONS"],
+    allow_headers=["authorization", "content-type"],
+    expose_headers=["x-cloud-trace-context"],
+    max_age=600,
+)
 
 
 # ---------------------------------------------------------------------------

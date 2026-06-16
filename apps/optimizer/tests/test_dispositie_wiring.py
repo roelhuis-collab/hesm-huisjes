@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 
 import pytest
 from src.optimizer.dispositie import (
@@ -85,8 +85,11 @@ def test_build_loads_skips_buffer_when_not_sunny() -> None:
 
 
 def _sample_decision() -> DispositionDecision:
+    # Use een interval kort vóór nu zodat de `hours=24`-query 'm consistent
+    # binnen het venster ziet, onafhankelijk van wanneer de test draait.
+    recent = (datetime.now() - timedelta(minutes=15)).replace(second=0, microsecond=0)
     return DispositionDecision(
-        interval_start="2026-06-15T12:00:00",
+        interval_start=recent.isoformat(),
         regime="saldering",
         spot_price_eur_per_kwh=0.085,
         forecast_surplus_kwh=1.5,
