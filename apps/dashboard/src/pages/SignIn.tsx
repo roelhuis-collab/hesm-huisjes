@@ -8,9 +8,11 @@ import { useState } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 
 export default function SignIn() {
-  const { signIn } = useAuth();
+  const { signIn, signInError } = useAuth();
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+
+  const displayError = error ?? signInError;
 
   async function handleSignIn() {
     setBusy(true);
@@ -47,9 +49,9 @@ export default function SignIn() {
           {busy ? 'Bezig…' : 'Inloggen met Google'}
         </button>
 
-        {error && (
-          <p className="mt-6 text-xs text-rose-300">
-            Inloggen mislukt: {error}
+        {displayError && (
+          <p className="mt-6 text-xs text-rose-300 break-all">
+            Inloggen mislukt: {displayError}
           </p>
         )}
       </div>
