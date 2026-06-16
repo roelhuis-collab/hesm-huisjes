@@ -50,6 +50,10 @@ steps:
       - --memory=512Mi
       - --timeout=60s
       - --set-env-vars=DASHBOARD_BASE_URL=https://hesm-huisjes.netlify.app,GCP_PROJECT=${PROJECT_ID},SCHEDULER_ALLOWED_EMAILS=hesm-scheduler@${PROJECT_ID}.iam.gserviceaccount.com,HESM_ENV=production
+      # Optionele secrets staan hier comma-gescheiden. Voor Growatt:
+      #   gcloud secrets create growatt-username --data-file=- --project=hesm-huisjes
+      #   gcloud secrets create growatt-password --data-file=- --project=hesm-huisjes
+      # Daarna deze regel uitbreiden met ,GROWATT_USERNAME=growatt-username:latest,GROWATT_PASSWORD=growatt-password:latest
       - --set-secrets=ANTHROPIC_API_KEY=anthropic-api-key:latest,SENTRY_DSN=sentry-dsn:latest
 
 images:
