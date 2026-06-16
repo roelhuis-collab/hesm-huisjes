@@ -1,23 +1,28 @@
 /**
- * Firebase Auth context.
+ * Firebase Auth context — anonymous-by-default.
  *
- * Sign-in uses signInWithRedirect everywhere. Reden: popup-flow botst op
- * Cross-Origin-Opener-Policy in moderne Chrome (window.closed-call wordt
- * geblokkeerd) en iOS Safari blokkeert popups in standalone-modus sowieso.
+ * We zaten vast in de iOS-PWA-trap met Google sign-in: redirect-chain liep
+ * door cross-origin proxies en de WebView verloor de auth-state. Voor een
+ * persoonlijk huis-systeem op een onbekende .netlify.app-URL is dat
+ * onevenredig veel pijn voor de waarde die login toevoegt.
  *
- * Redirect-errors van Firebase worden in een React-state hier opgevangen
- * EN ook door SignIn getoond, zodat een falende sign-in op de telefoon niet
- * stilletjes verdampt in een onzichtbare console.
+ * Oplossing zolang ``controllable=false`` blijft: anonymous Firebase Auth.
+ * Klant opent de app, AuthProvider doet ``signInAnonymously`` op de
+ * achtergrond, Firestore-rules (``request.auth != null``) blijven gerespecteerd,
+ * geen popup, geen redirect, geen iOS-WebView-issue.
+ *
+ * Wanneer de engine straks fysiek gaat schakelen (controllable=true) zetten
+ * we Google sign-in terug — dan willen we de identiteit echt weten — maar
+ * via een server-side auth-check op Cloud Run, niet via een client-side
+ * Firebase-popup in een iOS-PWA.
  */
 
 import {
-  GoogleAuthProvider,
   type User,
   browserLocalPersistence,
-  getRedirectResult,
   onAuthStateChanged,
   setPersistence,
-  signInWithRedirect,
+  signInAnonymously,
   signOut as fbSignOut,
 } from 'firebase/auth';
 import { createContext, useContext, useEffect, useMemo, useState } from 'react';
@@ -53,15 +58,23 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       console.error('persistence setup failed:', err);
     });
 
-    getRedirectResult(auth).catch((err) => {
-      console.error('redirect sign-in failed:', err);
-      setSignInError(describeAuthError(err));
+    const unsub = onAuthStateChanged(auth, (u) => {
+      if (u) {
+        setUser(u);
+        setLoading(false);
+        return;
+      }
+      // Geen user → anoniem inloggen. ``signInAnonymously`` doet één call
+      // zonder navigatie of postMessage en triggert onAuthStateChanged opnieuw
+      // met de nieuwe user. Bij netwerkfout valt-ie terug op signInError-UI.
+      signInAnonymously(auth).catch((err) => {
+        console.error('anonymous sign-in failed:', err);
+        setSignInError(describeAuthError(err));
+        setLoading(false);
+      });
     });
 
-    return onAuthStateChanged(auth, (u) => {
-      setUser(u);
-      setLoading(false);
-    });
+    return unsub;
   }, []);
 
   const value = useMemo<AuthContextValue>(
@@ -72,8 +85,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       signIn: async () => {
         setSignInError(null);
         try {
-          const provider = new GoogleAuthProvider();
-          await signInWithRedirect(auth, provider);
+          await signInAnonymously(auth);
         } catch (err) {
           setSignInError(describeAuthError(err));
           throw err;

@@ -1,30 +1,17 @@
 /**
- * Sign-in page — Google popup. iOS PWAs sometimes block popups; if that
- * shows up in real use, swap the popup for a redirect (signInWithRedirect).
+ * SignIn — verbindingsscherm.
+ *
+ * Auth gebeurt anoniem-op-de-achtergrond (zie AuthContext). Deze pagina is
+ * de loading-state voor de paar honderd ms tussen "PWA opent" en "Firebase
+ * Auth heeft een anonymous user". Bij netwerkfout valt het scherm hier
+ * stil met de Firebase-error in beeld.
  */
 
 import { Sparkles } from 'lucide-react';
-import { useState } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 
 export default function SignIn() {
-  const { signIn, signInError } = useAuth();
-  const [error, setError] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
-
-  const displayError = error ?? signInError;
-
-  async function handleSignIn() {
-    setBusy(true);
-    setError(null);
-    try {
-      await signIn();
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
-    } finally {
-      setBusy(false);
-    }
-  }
+  const { signInError, loading } = useAuth();
 
   return (
     <div className="flex min-h-screen flex-col items-center justify-center px-8">
@@ -35,23 +22,13 @@ export default function SignIn() {
           home energy by Huisjes
         </p>
 
-        <button
-          onClick={handleSignIn}
-          disabled={busy}
-          className="
-            w-full rounded-2xl border border-slate-800 bg-slate-900
-            px-8 py-4 text-base font-light
-            transition-all hover:border-amber-400/40 hover:bg-slate-800
-            active:scale-[0.98]
-            disabled:opacity-50
-          "
-        >
-          {busy ? 'Bezig…' : 'Inloggen met Google'}
-        </button>
+        <p className="text-sm text-slate-400">
+          {loading ? 'Verbinden…' : signInError ? 'Verbinden mislukt' : 'Bezig'}
+        </p>
 
-        {displayError && (
+        {signInError && (
           <p className="mt-6 text-xs text-rose-300 break-all">
-            Inloggen mislukt: {displayError}
+            {signInError}
           </p>
         )}
       </div>
