@@ -1,1 +1,10 @@
+# Proxy Firebase auth helper paths naar het Firebase-project. Hierdoor blijft
+# de hele signInWithRedirect-chain op netlify.app — cruciaal voor iOS standalone
+# PWA's, waar cross-origin redirects de WebView verlaten en de auth nooit
+# terugkomt in de geïnstalleerde app. authDomain in VITE_FIREBASE_AUTH_DOMAIN
+# moet hiervoor op hesm-huisjes.netlify.app staan (niet firebaseapp.com).
+/__/auth/*       https://hesm-huisjes.firebaseapp.com/__/auth/:splat       200
+/__/firebase/*   https://hesm-huisjes.firebaseapp.com/__/firebase/:splat   200
+
+# SPA fallback voor alle andere routes.
 /*    /index.html   200
