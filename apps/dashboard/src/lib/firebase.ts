@@ -15,9 +15,18 @@ import {
 } from 'firebase/auth';
 import { getFirestore } from 'firebase/firestore';
 
+// Productie pinnen we op de netlify.app-origin zodat signInWithRedirect
+// nooit cross-origin gaat (iOS standalone PWA's verlaten anders de WebView).
+// Netlify proxy't /__/auth/* door naar firebaseapp.com — zie public/_redirects.
+// In dev (localhost) gebruiken we de env var; Firebase Auth accepteert localhost
+// als trusted origin tegen de firebaseapp.com handler.
+const PROD_AUTH_DOMAIN = 'hesm-huisjes.netlify.app';
+
 const firebaseConfig: FirebaseOptions = {
   apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
-  authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN,
+  authDomain: import.meta.env.PROD
+    ? PROD_AUTH_DOMAIN
+    : (import.meta.env.VITE_FIREBASE_AUTH_DOMAIN ?? 'hesm-huisjes.firebaseapp.com'),
   projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID,
   storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET,
   messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID,
