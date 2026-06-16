@@ -8,6 +8,16 @@
   command = "npm run build"
   publish = "dist"
 
+# Secrets-scanner mag de Firebase Web API-key (begint met "AIza...") niet
+# als secret zien — die is intentioneel publiek (identificeert het
+# Firebase-project; security zit in Firestore-rules en Auth-domain-allowlist).
+# Zonder deze omits faalt elke Netlify-build sinds Firebase v10 op de SDK's
+# eigen type-definities in node_modules/@firebase/app/dist/*.d.ts.
+[build.environment]
+  SECRETS_SCAN_SMART_DETECTION_ENABLED = "true"
+  SECRETS_SCAN_OMIT_KEYS = "VITE_FIREBASE_API_KEY,VITE_FIREBASE_APP_ID,VITE_FIREBASE_MESSAGING_SENDER_ID"
+  SECRETS_SCAN_OMIT_PATHS = "node_modules/**,dist/assets/firebase-*.js"
+
 # All routes are client-side rendered by React Router. Netlify needs to
 # rewrite every request that isn't a static asset back to index.html so
 # deep links (/, /signin, /advanced, etc.) load the SPA.
