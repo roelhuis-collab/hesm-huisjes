@@ -41,6 +41,12 @@ export default defineConfig({
         navigateFallbackDenylist: [
           // Don't fall back for API requests to other origins.
           /^\/(api|chat|policy|optimize|jobs|override|learning|health)/,
+          // Firebase auth handler + init zijn cruciale proxy-routes naar
+          // firebaseapp.com (zie public/_redirects). Als de SW deze
+          // navigaties opslokt en index.html teruggeeft, breekt de
+          // signInWithRedirect-callback en valt de iOS-PWA terug op
+          // /signin zonder zichtbare error.
+          /^\/__\//,
         ],
       },
     }),
