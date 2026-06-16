@@ -265,8 +265,10 @@ def _parse_base_stream(payload: Any) -> list[QuarterPrice]:
         price_obj = item.get("price")
         if not isinstance(start_raw, str) or not isinstance(price_obj, dict):
             continue
+        # EnergyZero stuurt ``value`` als string (bv. "0.12454") in de live-API
+        # — in onze testfixtures zijn het floats. Beide accepteren.
         value = price_obj.get("value")
-        if not isinstance(value, int | float):
+        if not isinstance(value, int | float | str):
             continue
         try:
             start = _parse_iso_utc(start_raw)
