@@ -8,7 +8,11 @@
 
     <!-- iOS PWA -->
     <meta name="apple-mobile-web-app-capable" content="yes" />
-    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <!-- 'black' = opaque status bar (matches theme-color), zodat de iOS-UI
+         niet over de inhoud lift en de getallen niet door de tijd worden
+         doorsneden bij scrollen. 'black-translucent' liet content onder
+         het statusbalk-gebied schuiven. -->
+    <meta name="apple-mobile-web-app-status-bar-style" content="black" />
     <meta name="apple-mobile-web-app-title" content="HESM" />
 
     <link rel="manifest" href="/manifest.json" />
