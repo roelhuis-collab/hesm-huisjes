@@ -251,22 +251,27 @@ def _avg_price(prices: Any) -> float | None:
 # ---------------------------------------------------------------------------
 
 
-async def _apply_plan(plan: Plan, policy: Policy) -> None:
+SETPOINT_EPSILON_C = 0.15  # skip Resideo writes smaller than this — API noise
+
+
+async def _apply_plan(plan: Plan, policy: Policy, gathered: dict[str, Any]) -> None:
     """Send the plan to the relevant device clients.
 
-    WeHeat is read-only — its public ``third_party`` API has no write
-    endpoints, so the heat pump runs on its own internal logic and we
-    only observe. The Plan's ``boiler_target_temp`` is preserved as an
-    informational signal (persisted on the Decision, drives dompelaar
-    logic in v0) but is not pushed to WeHeat. The Shelly relay is
-    therefore the only DHW lever we actually actuate from this cycle.
+    Three levers today:
+      1. **Shelly relay** on the immersion heater — direct on/off (parked
+         until dompelaar-hardware is installed; mock accepts the call).
+      2. **Resideo thermostat setpoint** — current setpoint + Layer-2
+         offset, clamped to the living-room comfort band (Layer 1).
+         This is the first *cloud-only* write path that actually reaches
+         real hardware without waiting on a physical install.
+      3. **WeHeat is read-only** — the public ``third_party`` API has no
+         write endpoints. ``boiler_target_temp`` is persisted on the
+         Decision for context but never pushed to the heat pump.
 
-    Real Resideo / Shelly clients raise NotImplementedError until vendor
-    creds arrive (PR12 mocks accept the calls). The cycle swallows those
-    errors so we don't crash on missing creds.
+    Failures are swallowed via ``_safe_call`` so a missing credential or
+    a device-cloud outage never crashes the optimizer cycle. The
+    scheduler retries every 15 minutes regardless.
     """
-    del policy  # boiler clamping already happens inside v0._safe_boiler_target
-
     shelly = shelly_client()
     try:
         await _safe_call(
@@ -276,14 +281,60 @@ async def _apply_plan(plan: Plan, policy: Policy) -> None:
     finally:
         await _safe_call(shelly.aclose(), name="shelly-close")
 
+    resideo_target = await _apply_resideo_setpoint(
+        offset=plan.indoor_setpoint_offset,
+        policy=policy,
+        current=gathered.get("resideo"),
+    )
+
     log.info(
-        "apply: boiler-target=%.0f°C (informational) dompelaar=%s hp=%s offset=%+.1f°C — %s",
+        "apply: boiler-target=%.0f°C (informational) dompelaar=%s hp=%s "
+        "setpoint→%s offset=%+.1f°C — %s",
         plan.boiler_target_temp,
         plan.dompelaar_on,
         plan.heat_pump_allowed,
+        f"{resideo_target:.1f}°C" if resideo_target is not None else "skip",
         plan.indoor_setpoint_offset,
         plan.action,
     )
+
+
+async def _apply_resideo_setpoint(
+    *,
+    offset: float,
+    policy: Policy,
+    current: Any,
+) -> float | None:
+    """Push a new setpoint to the Resideo thermostat, clamped to Layer-1.
+
+    Returns the target temperature we actually sent, or ``None`` if we
+    skipped the write (no offset / no current reading / delta too
+    small). Clamping uses ``policy.limits.living_room`` — the
+    thermostat lives in the woonkamer so that band drives the ceiling.
+    """
+    if current is None:
+        return None
+    setpoint_c = getattr(current, "setpoint_c", None)
+    if setpoint_c is None:
+        return None
+
+    raw_target = float(setpoint_c) + float(offset)
+    clamped = policy.limits.living_room.clamp(raw_target)
+
+    # Skip small nudges — the Honeywell UI shows 0.5° increments so
+    # anything below ~0.15° round-trips as noise and burns API calls.
+    if abs(clamped - float(setpoint_c)) < SETPOINT_EPSILON_C:
+        return None
+
+    resideo = resideo_client()
+    try:
+        await _safe_call(
+            resideo.set_setpoint(clamped),
+            name="resideo-setpoint",
+        )
+    finally:
+        await _safe_call(resideo.aclose(), name="resideo-close")
+    return clamped
 
 
 # ---------------------------------------------------------------------------
@@ -478,7 +529,7 @@ async def run_cycle() -> Plan:
         overrides=policy.overrides or None,
     )
 
-    await _apply_plan(plan, policy)
+    await _apply_plan(plan, policy, gathered)
     _persist(persistable, plan, policy)
 
     # Dispositie-engine draait ná de v0-plan en schrijft ZIJN beslissing apart
