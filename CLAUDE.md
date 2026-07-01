@@ -28,7 +28,7 @@ The repo already has a scaffold (see "What's already built"). Your job is to ext
 
 **Out of scope:**
 - BRP/leveringsvergunning routes (regulatory complexity, no value-add for residential)
-- Direct EPEX/wholesale market participation (use a dynamic-tariff supplier as the meta-layer; Roel's switching to Tibber/Frank/EnergyZero from 1 Jul 2026)
+- Direct EPEX/wholesale market participation (use a dynamic-tariff supplier as the meta-layer; Roel's switching to **Zonneplan** from 7 Jul 2026 — supersedes the earlier Tibber/Frank/EnergyZero plan)
 - Edge hardware (Roel explicitly rejected a mini-PC; cloud-only)
 
 ## Hardware setup (being installed Q2 2026)
@@ -225,7 +225,8 @@ Work these top-to-bottom unless you discover a blocker. Each PR is its own branc
    - Discrepancy uncovered: `main.py` imports `src.optimizer.v0`, `src.connectors`, `src.ai.claude` — none exist. Wiring deferred to PR5.
 2. **PR2 — HomeWizard P1 connector** ✅ shipped
    - Built against the **local v1 API** — HomeWizard has no public cloud API.
-   - Local-network exposure delegated to a tunnel (Cloudflare Tunnel or Tailscale) on an always-on LAN device. Choice deferred to PR5; rationale + options in `infra/SETUP.md`.
+   - **Validated against real hardware 2026-04-30**: P1 op `192.168.1.132` (`hw-p1meter-42b5ea.home`), serial `5c2faf42b5ea`, firmware 5.19, DSMR 5.0. Connector parst alle velden zonder errors.
+   - **Tunnel parked.** Roel switcht per 1 juli 2026 naar Tibber/Frank/EnergyZero — die geven dezelfde P1-data via cloud-API en maken een lokale tunnel obsoleet. Tot dan: optimizer draait op mocks (PR12). Heroverweeg alleen als WeHeat live komt vóór 1 juli én de supplier-switch nog niet is gemaakt.
    - Established the connector pattern: shared `ConnectorError` hierarchy in `connectors/base.py`, async httpx client, env-driven config, MockTransport tests. PR3+ copy this shape.
 3. **PR3 — ENTSO-E prices connector** ✅ shipped
    - Async client for `web-api.tp.entsoe.eu/api`, document type A44 / process A01, NL domain `10YNL----------L`. Returns hourly `HourlyPrice(timestamp_utc, spot_eur_mwh, all_in_eur_kwh)` for a given local day; tolerates DST 23/25-hour days.
@@ -250,16 +251,13 @@ Work these top-to-bottom unless you discover a blocker. Each PR is its own branc
    - Implementation wraps the official `weheat` SDK (`HeatPumpDiscovery`, `HeatPump`); thin adapter so a future swap is one-file.
    - Connector returns `WeHeatStatus` (read-only): boiler/buffer/flow/return temps, HP power in/out, COP, compressor %, room thermostat readback, `heat_pump_state` enum. No `set_*` methods anywhere.
    - `optimizer/cycle.py:_apply_plan` accordingly sends only Shelly relay commands (the immersion heater is the only DHW lever). Boiler-target stays in the Plan as an informational target that drives dompelaar logic.
-7. **PR7 — Resideo Lyric connector**
-   - Total Connect Comfort API
-   - OAuth2 with refresh tokens
-   - Endpoints: read indoor temp + setpoint, write setpoint
-8. **PR8 — Shelly Cloud connector**
-   - Shelly Cloud API for Pro 2PM (controls dompelaar)
-   - Read state, write on/off
-9. **PR9 — Growatt connector (cloud first)**
-   - ShineWiFi-X cloud poll for PV production, per-phase power
-   - Local Modbus TCP via Waveshare gateway as future option (own PR later)
+7. **PR7 — Resideo Lyric connector** ✅ shipped
+   - Honeywell Home developer-portal OAuth2 (`authorization_code` flow with HTTP Basic at the token endpoint). One-time `scripts/resideo_bootstrap.py` captures a refresh token → Secret Manager (`resideo-refresh-token` + `resideo-client-id` + `resideo-client-secret`). Cloud Run swaps refresh→access on demand; tokens cached for their TTL.
+   - Endpoints used: `GET /v2/locations` (discovery) → first location → first thermostat → `GET /v2/devices/thermostats/{id}?locationId=…` (read) / `POST` same path (write `heatSetpoint` + `mode=Heat` + `TemporaryHold`).
+   - **This is the first connector with a real *write* path.** WeHeat is read-only by API design; PV/HP have no write surface; Shelly write-path arrives only when the dompelaar is physically installed. So Resideo is currently the only lever the optimizer can actuate end-to-end.
+   - Falls back to `MockResideoClient` when any of the three env vars is unset. 16 new tests (175 total) — mypy strict + ruff clean.
+8. **PR8 — Shelly Cloud connector** — **parked**, hardware-blocked. The Shelly Pro 2PM relay sits in front of the 3 kW immersion heater inside the boiler tank; the dompelaar is not yet installed (Roel has confirmed 2026-06-22). Wire this PR up once installation lands.
+9. **PR9 — Growatt connector** — **parked**, superseded by Zonneplan. Roel's PV inverter is a Growatt MOD 9000TL3-X but a Zonneplan Connect dongle sits on his P1 (Zonneplan supplier-switch effective 7 jul 2026). Zonneplan-cloud delivers P1 reads + dynamic tariff + (likely) PV production in one API call — that becomes the new PR9. The existing `connectors/growatt.py` stays as a fallback in case Zonneplan turns out to lack PV detail, but it's not wired in production. **HomeWizard tunnel also parked** — Zonneplan-cloud reaches Cloud Run without LAN tunneling, so no Raspberry Pi or Cloudflare tunnel is needed after all (corrected from earlier guidance).
 10. **PR10 — Claude AI chat backend** ✅ shipped
     - `src/ai/claude.py` with async `answer_with_context(messages)` streaming Server-Sent Events. System prompt rebuilt per request from Firestore (persona + house spec + Layer 1/2 + last SystemState + 24 h of decisions); one `cache_control` breakpoint at the system block.
     - Default `claude-sonnet-4-6` (Sonnet 4.7 doesn't exist — corrected from CLAUDE.md). Override via `HESM_CHAT_MODEL` env.
@@ -282,7 +280,7 @@ Roel will obtain these. Document the steps in `infra/SETUP.md` so he can do it w
 | Anthropic | Claude API key | console.anthropic.com → API Keys |
 | ENTSO-E | EPEX prices | Email request to transparency@entsoe.eu |
 | WeHeat | Refresh token | One-time `uv run scripts/weheat_bootstrap.py` (uses public HA OAuth client `HomeAssistantAPI`); store result in Secret Manager as `weheat-refresh-token` |
-| Resideo | Client ID + Secret | developer.honeywellhome.com |
+| Resideo | Client ID + Secret + Refresh Token | developer.honeywellhome.com → My Apps → use redirect `http://localhost:8765/callback`. Then one-time `uv run scripts/resideo_bootstrap.py --client-id … --client-secret …`. See `infra/SETUP.md` for the full PR7 runbook. |
 | Shelly Cloud | Auth key | Shelly account → settings → cloud auth |
 | HomeWizard | Token | HomeWizard Energy app → settings → token |
 | Growatt | Username + Password | Existing ShinePhone account |

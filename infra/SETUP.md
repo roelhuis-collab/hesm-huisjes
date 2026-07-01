@@ -21,7 +21,7 @@ PR5 ships the first deployable system; this file is its companion.
 | Scheduler SA | `hesm-scheduler@hesm-huisjes.iam.gserviceaccount.com` |
 | Artifact Registry repo | `europe-west4-docker.pkg.dev/hesm-huisjes/hesm/` |
 | Firestore | Native mode, `europe-west4` |
-| Secret Manager secrets | `anthropic-api-key`, `sentry-dsn`, `weheat-refresh-token` (PR6) |
+| Secret Manager secrets | `anthropic-api-key`, `sentry-dsn`, `weheat-refresh-token` (PR6), `resideo-client-id` + `resideo-client-secret` + `resideo-refresh-token` (PR7, when wired) |
 
 ---
 
@@ -331,6 +331,71 @@ WEHEAT_REFRESH_TOKEN=weheat-refresh-token:latest
 
 The connector falls back to `MockWeHeatClient` when `WEHEAT_REFRESH_TOKEN`
 is unset, so the cycle keeps running on staging without it.
+
+### Resideo Lyric thermostat (PR7)
+
+Resideo uses OAuth2 `authorization_code` against the Honeywell Home
+developer portal (`developer.honeywellhome.com`). Unlike WeHeat there's
+no public OAuth client we can re-use — Roel needs to register his own
+app at the portal and obtain a Consumer Key + Consumer Secret.
+
+**Step 1 — register an app at developer.honeywellhome.com:**
+
+- Sign in with your Honeywell-account (same login as the Lyric app).
+- *My Apps* → *Create a new app*.
+- App Name: anything (e.g. `HESM Sittard`).
+- Callback URL: **`http://localhost:8765/callback`** — required exact match.
+- Save. The portal shows your `Consumer Key` (= client_id) and
+  `Consumer Secret` (= client_secret).
+
+**Step 2 — capture the refresh token (one-time, on Roel's laptop):**
+
+```bash
+cd apps/optimizer
+uv run scripts/resideo_bootstrap.py \
+  --client-id   '<CONSUMER_KEY>' \
+  --client-secret '<CONSUMER_SECRET>'
+```
+
+A browser opens, you sign in to Honeywell and approve the app; the
+script prints the refresh token to stdout. Honeywell rotates refresh
+tokens on each access-token refresh, so the secret stays valid as long
+as the cycle keeps running successfully (no manual rotation needed).
+
+**Step 3 — store creds + grant access:**
+
+```bash
+printf '%s' '<CONSUMER_KEY>' | gcloud secrets create resideo-client-id \
+  --data-file=- --replication-policy=automatic --project=hesm-huisjes
+
+printf '%s' '<CONSUMER_SECRET>' | gcloud secrets create resideo-client-secret \
+  --data-file=- --replication-policy=automatic --project=hesm-huisjes
+
+printf '%s' '<REFRESH_TOKEN>' | gcloud secrets create resideo-refresh-token \
+  --data-file=- --replication-policy=automatic --project=hesm-huisjes
+
+for s in resideo-client-id resideo-client-secret resideo-refresh-token; do
+  gcloud secrets add-iam-policy-binding "$s" \
+    --member="serviceAccount:hesm-optimizer@hesm-huisjes.iam.gserviceaccount.com" \
+    --role="roles/secretmanager.secretAccessor" --project=hesm-huisjes
+done
+```
+
+**Step 4 — extend `cloudbuild.yaml` `--set-secrets`:**
+
+```
+RESIDEO_CLIENT_ID=resideo-client-id:latest,RESIDEO_CLIENT_SECRET=resideo-client-secret:latest,RESIDEO_REFRESH_TOKEN=resideo-refresh-token:latest
+```
+
+The connector falls back to `MockResideoClient` whenever any of the
+three vars is unset, so the cycle keeps running on staging without it.
+
+**Caveat — refresh-token rotation:** Honeywell rotates refresh tokens on
+every access-token refresh. The current connector keeps the rotated
+token in-process but does **not** write it back to Secret Manager.
+That's fine for hours of uptime; for a long-lived Cloud Run instance
+the next refresh after a cold start uses the original (stable) token.
+If you ever see `ResideoAuthError` in logs, just re-run the bootstrap.
 
 ### CI/CD trigger from GitHub
 

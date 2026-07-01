@@ -50,10 +50,17 @@ steps:
       - --memory=512Mi
       - --timeout=60s
       - --set-env-vars=DASHBOARD_BASE_URL=https://hesm-huisjes.netlify.app,GCP_PROJECT=${PROJECT_ID},SCHEDULER_ALLOWED_EMAILS=hesm-scheduler@${PROJECT_ID}.iam.gserviceaccount.com,HESM_ENV=production
-      # Optionele secrets staan hier comma-gescheiden. Voor Growatt:
+      # Optionele secrets staan hier comma-gescheiden.
+      # Voor Resideo (PR7) — Honeywell Home OAuth2:
+      #   uv run scripts/resideo_bootstrap.py --client-id ... --client-secret ...  # eenmalig
+      #   printf '%s' '<consumer-key>'    | gcloud secrets create resideo-client-id     --data-file=- --project=hesm-huisjes
+      #   printf '%s' '<consumer-secret>' | gcloud secrets create resideo-client-secret --data-file=- --project=hesm-huisjes
+      #   printf '%s' '<refresh-token>'   | gcloud secrets create resideo-refresh-token --data-file=- --project=hesm-huisjes
+      #   # ,RESIDEO_CLIENT_ID=resideo-client-id:latest,RESIDEO_CLIENT_SECRET=resideo-client-secret:latest,RESIDEO_REFRESH_TOKEN=resideo-refresh-token:latest
+      # Voor Growatt (PR9, alleen als Zonneplan geen PV-data levert):
       #   gcloud secrets create growatt-username --data-file=- --project=hesm-huisjes
       #   gcloud secrets create growatt-password --data-file=- --project=hesm-huisjes
-      # Daarna deze regel uitbreiden met ,GROWATT_USERNAME=growatt-username:latest,GROWATT_PASSWORD=growatt-password:latest
+      #   # ,GROWATT_USERNAME=growatt-username:latest,GROWATT_PASSWORD=growatt-password:latest
       - --set-secrets=ANTHROPIC_API_KEY=anthropic-api-key:latest,SENTRY_DSN=sentry-dsn:latest
 
 images:
