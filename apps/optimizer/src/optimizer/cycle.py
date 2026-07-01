@@ -37,6 +37,7 @@ from src.connectors.openmeteo import HourlyForecast, OpenMeteoClient
 from src.connectors.resideo import resideo_client
 from src.connectors.shelly import shelly_client
 from src.connectors.weheat import weheat_client
+from src.connectors.zonneplan import zonneplan_client
 from src.optimizer.dispositie import (
     SITE_CONFIG_DEFAULT,
     TARIFF,
@@ -106,6 +107,7 @@ async def _gather_all() -> dict[str, Any]:
     resideo = resideo_client()
     shelly = shelly_client()
     growatt = growatt_client()
+    zonneplan = zonneplan_client()
 
     today = datetime.now().date()
 
@@ -128,6 +130,7 @@ async def _gather_all() -> dict[str, Any]:
                 resideo_status,
                 shelly_status,
                 growatt_status,
+                zonneplan_status,
                 hw_reading,
                 price_curve,
                 weather_curve,
@@ -136,6 +139,7 @@ async def _gather_all() -> dict[str, Any]:
                 _safe_call(resideo.get_status(), name="resideo"),
                 _safe_call(shelly.get_status(), name="shelly"),
                 _safe_call(growatt.get_status(), name="growatt"),
+                _safe_call(zonneplan.get_status(), name="zonneplan"),
                 _safe_call(hw_task, name="homewizard"),
                 _safe_call(ent.get_day_ahead_prices(today), name="entsoe"),
                 _safe_call(wc.get_forecast(48), name="openmeteo"),
@@ -147,6 +151,7 @@ async def _gather_all() -> dict[str, Any]:
         _safe_call(resideo.aclose(), name="resideo-close"),
         _safe_call(shelly.aclose(), name="shelly-close"),
         _safe_call(growatt.aclose(), name="growatt-close"),
+        _safe_call(zonneplan.aclose(), name="zonneplan-close"),
     )
 
     return {
@@ -154,6 +159,7 @@ async def _gather_all() -> dict[str, Any]:
         "resideo": resideo_status,
         "shelly": shelly_status,
         "growatt": growatt_status,
+        "zonneplan": zonneplan_status,
         "homewizard": hw_reading,
         "prices": price_curve,
         "weather": weather_curve,
@@ -176,15 +182,34 @@ async def _gather_homewizard(base_url: str) -> P1MeterReading | None:
 
 
 def _compose_state(gathered: dict[str, Any]) -> tuple[StateInput, SystemState]:
-    """Merge connector outputs into the optimizer input + persistable state."""
+    """Merge connector outputs into the optimizer input + persistable state.
+
+    **Source precedence** (from 2026-06-26 pivot):
+    - PV power: Zonneplan if present (single source-of-truth, same
+      hardware Roel bought), else Growatt cloud, else 0.
+    - Grid net power: Zonneplan (cloud, always reachable) → HomeWizard
+      (local, only if tunnel), else None → synthesized estimate.
+    - Current tariff: Zonneplan's actual retail tariff (VAT-inclusive)
+      if present, else ENTSO-E day-ahead + retail-markup formula.
+    """
     now = datetime.now()
     weheat = gathered["weheat"]
     resideo = gathered["resideo"]
     shelly = gathered["shelly"]
     growatt = gathered["growatt"]
+    zonneplan = gathered.get("zonneplan")
     hw: P1MeterReading | None = gathered["homewizard"]
 
-    pv = float(growatt.pv_power_w) if growatt else 0.0
+    # PV: Zonneplan wins (same Growatt panels, but exposed via the
+    # supplier we're actually paying); Growatt cloud is the fallback if
+    # Zonneplan lacks PV detail; zero if neither is live.
+    if zonneplan is not None and zonneplan.pv_power_w > 0:
+        pv = float(zonneplan.pv_power_w)
+    elif growatt is not None:
+        pv = float(growatt.pv_power_w)
+    else:
+        pv = 0.0
+
     hp = float(weheat.hp_power_w) if weheat else 0.0
     dompelaar = bool(shelly.is_on) if shelly else False
     boiler_temp = float(weheat.boiler_temp_c) if weheat else 50.0
@@ -196,8 +221,16 @@ def _compose_state(gathered: dict[str, Any]) -> tuple[StateInput, SystemState]:
     weather: list[HourlyForecast] | None = gathered["weather"]
     outdoor_temp = float(weather[0].temperature_c) if weather else 12.0
 
-    # House load: prefer P1 net; fall back to a synthesized estimate.
-    grid_import = float(hw.active_power_w) if hw and hw.active_power_w is not None else None
+    # Grid net: Zonneplan cloud (always reachable) beats HomeWizard
+    # (LAN-only, no tunnel in production). Both give a signed active
+    # power in W with the convention "positive = importing".
+    if zonneplan is not None:
+        grid_import: float | None = float(zonneplan.active_power_w)
+    elif hw is not None and hw.active_power_w is not None:
+        grid_import = float(hw.active_power_w)
+    else:
+        grid_import = None
+
     if grid_import is not None:
         # net = house_load + hp + dompelaar - pv  ⇒  house = net + pv - hp - dompelaar
         dompelaar_w = float(shelly.power_w) if shelly else 0.0
@@ -205,9 +238,13 @@ def _compose_state(gathered: dict[str, Any]) -> tuple[StateInput, SystemState]:
     else:
         house_load = 600.0  # rough baseline residential load
 
-    # Current price = first hour of today's curve, if available.
-    prices = gathered["prices"]
-    current_price = float(prices[0].all_in_eur_kwh) if prices else None
+    # Current tariff: Zonneplan's actual retail if present (they're
+    # the supplier so their number is the truth), else ENTSO-E-derived.
+    if zonneplan is not None:
+        current_price: float | None = float(zonneplan.tariff_all_in_eur_kwh)
+    else:
+        prices = gathered["prices"]
+        current_price = float(prices[0].all_in_eur_kwh) if prices else None
     # avg_price is computed by the caller via _avg_price() when needed.
 
     state_input = StateInput(

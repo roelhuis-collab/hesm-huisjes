@@ -397,6 +397,58 @@ That's fine for hours of uptime; for a long-lived Cloud Run instance
 the next refresh after a cold start uses the original (stable) token.
 If you ever see `ResideoAuthError` in logs, just re-run the bootstrap.
 
+### Zonneplan tokens (PR9-new)
+
+Zonneplan is Roel's supplier from 7 jul 2026 (replaces the earlier
+Tibber/Frank/EnergyZero plan). One cloud call gives P1 net power +
+retail tariff + PV production — replaces the ENTSO-E retail-markup
+formula for pricing and moots the HomeWizard tunnel for grid data.
+
+**Step 1 — bootstrap (one-time, on Roel's laptop):**
+
+```bash
+cd apps/optimizer
+uv run scripts/zonneplan_bootstrap.py --email 'roelhuis@gmail.com'
+```
+
+You get a magic-link email from Zonneplan; paste the one-time code
+back into the terminal. The script prints an `access_token`,
+`refresh_token`, and `device_uuid` (a fresh UUID it generated for you).
+
+**Step 2 — store all three in Secret Manager + grant access:**
+
+```bash
+printf '%s' '<ACCESS_TOKEN>' | gcloud secrets create zonneplan-access-token \
+  --data-file=- --replication-policy=automatic --project=hesm-huisjes
+
+printf '%s' '<REFRESH_TOKEN>' | gcloud secrets create zonneplan-refresh-token \
+  --data-file=- --replication-policy=automatic --project=hesm-huisjes
+
+printf '%s' '<DEVICE_UUID>' | gcloud secrets create zonneplan-device-uuid \
+  --data-file=- --replication-policy=automatic --project=hesm-huisjes
+
+for s in zonneplan-access-token zonneplan-refresh-token zonneplan-device-uuid; do
+  gcloud secrets add-iam-policy-binding "$s" \
+    --member="serviceAccount:hesm-optimizer@hesm-huisjes.iam.gserviceaccount.com" \
+    --role="roles/secretmanager.secretAccessor" --project=hesm-huisjes
+done
+```
+
+**Step 3 — extend `cloudbuild.yaml` `--set-secrets`:**
+
+```
+ZONNEPLAN_ACCESS_TOKEN=zonneplan-access-token:latest,ZONNEPLAN_REFRESH_TOKEN=zonneplan-refresh-token:latest,ZONNEPLAN_DEVICE_UUID=zonneplan-device-uuid:latest
+```
+
+Falls back to `MockZonneplanClient` when any of the three is unset;
+the cycle keeps running on staging without it.
+
+**Endpoint caveat:** the Zonneplan API is not officially public. The
+paths mirror what the community Home-Assistant integration uses
+successfully. If Zonneplan drifts, symptoms will surface as
+`ZonneplanMalformed` in Cloud Logs on the first live run — the
+connector proper never crashes the cycle thanks to `_safe_call`.
+
 ### CI/CD trigger from GitHub
 
 Right now we run `gcloud builds submit` manually. PR-trigger is a small

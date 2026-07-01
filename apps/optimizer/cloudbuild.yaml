@@ -57,7 +57,13 @@ steps:
       #   printf '%s' '<consumer-secret>' | gcloud secrets create resideo-client-secret --data-file=- --project=hesm-huisjes
       #   printf '%s' '<refresh-token>'   | gcloud secrets create resideo-refresh-token --data-file=- --project=hesm-huisjes
       #   # ,RESIDEO_CLIENT_ID=resideo-client-id:latest,RESIDEO_CLIENT_SECRET=resideo-client-secret:latest,RESIDEO_REFRESH_TOKEN=resideo-refresh-token:latest
-      # Voor Growatt (PR9, alleen als Zonneplan geen PV-data levert):
+      # Voor Zonneplan (PR9-new) — P1 + tariff + PV in één cloud-call:
+      #   uv run scripts/zonneplan_bootstrap.py --email 'roelhuis@gmail.com'  # eenmalig
+      #   printf '%s' '<access-token>'  | gcloud secrets create zonneplan-access-token  --data-file=- --project=hesm-huisjes
+      #   printf '%s' '<refresh-token>' | gcloud secrets create zonneplan-refresh-token --data-file=- --project=hesm-huisjes
+      #   printf '%s' '<device-uuid>'   | gcloud secrets create zonneplan-device-uuid   --data-file=- --project=hesm-huisjes
+      #   # ,ZONNEPLAN_ACCESS_TOKEN=zonneplan-access-token:latest,ZONNEPLAN_REFRESH_TOKEN=zonneplan-refresh-token:latest,ZONNEPLAN_DEVICE_UUID=zonneplan-device-uuid:latest
+      # Voor Growatt (fallback, alleen als Zonneplan geen PV-data levert):
       #   gcloud secrets create growatt-username --data-file=- --project=hesm-huisjes
       #   gcloud secrets create growatt-password --data-file=- --project=hesm-huisjes
       #   # ,GROWATT_USERNAME=growatt-username:latest,GROWATT_PASSWORD=growatt-password:latest

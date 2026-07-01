@@ -180,7 +180,8 @@ async def health() -> dict[str, Any]:
             "weheat_connector": True,        # PR6 (real when WEHEAT_REFRESH_TOKEN set)
             "resideo_connector": True,       # PR7 (real when RESIDEO_* env vars set)
             "shelly_connector": True,        # PR12 (mock until dompelaar installed)
-            "growatt_connector": True,       # PR9 (parked — Zonneplan delivers PV from 7 jul 2026)
+            "growatt_connector": True,       # PR9 (fallback only — Zonneplan is primary PV)
+            "zonneplan_connector": True,     # PR9-new (real when ZONNEPLAN_* env vars set)
             "ai_chat": True,                 # PR10
             "optimizer_v0": True,            # PR13
         },
