@@ -22,7 +22,13 @@ export function StatePanel() {
     <Card title="Live waardes" trailing={<LiveDot isLive={isLive} />}>
       <div className="grid grid-cols-2 gap-x-6 gap-y-4 sm:grid-cols-3">
         <Metric label="binnen" value={state.indoor_temp} unit="°C" />
+        {typeof state.indoor_setpoint === 'number' && state.indoor_setpoint !== null && (
+          <Metric label="setpoint" value={state.indoor_setpoint} unit="°C" />
+        )}
         <Metric label="buiten" value={state.outdoor_temp} unit="°C" />
+        {typeof state.indoor_humidity === 'number' && state.indoor_humidity !== null && (
+          <Metric label="lv" value={state.indoor_humidity} unit="%" decimals={0} />
+        )}
         <Metric label="boiler" value={state.boiler_temp} unit="°C" />
         <Metric label="buffer" value={state.buffer_temp} unit="°C" />
         <Metric label="pv" value={state.pv_power} unit="W" decimals={0} />

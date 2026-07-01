@@ -260,6 +260,15 @@ def _compose_state(gathered: dict[str, Any]) -> tuple[StateInput, SystemState]:
         price_eur_kwh=current_price,
     )
 
+    indoor_setpoint = (
+        float(resideo.setpoint_c) if resideo and resideo.setpoint_c is not None else None
+    )
+    indoor_humidity = (
+        float(resideo.humidity_pct)
+        if resideo and getattr(resideo, "humidity_pct", None) is not None
+        else None
+    )
+
     persistable = SystemState(
         timestamp=now,
         pv_power=pv,
@@ -271,6 +280,8 @@ def _compose_state(gathered: dict[str, Any]) -> tuple[StateInput, SystemState]:
         indoor_temp=indoor_temp,
         outdoor_temp=outdoor_temp,
         cop=cop,
+        indoor_setpoint=indoor_setpoint,
+        indoor_humidity=indoor_humidity,
         grid_import=grid_import,
         price_eur_kwh=current_price,
     )

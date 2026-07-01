@@ -72,6 +72,8 @@ class SystemState(BaseModel):
     cop: float | None = Field(default=None, description="Heat pump COP if reported")
     grid_import: float | None = Field(default=None, description="P1 net import, W (negative = export)")
     price_eur_kwh: float | None = Field(default=None, description="All-in spot price at this timestamp")
+    indoor_setpoint: float | None = Field(default=None, description="Thermostat setpoint at capture, °C")
+    indoor_humidity: float | None = Field(default=None, description="Indoor relative humidity, %")
 
 
 # ---------------------------------------------------------------------------
