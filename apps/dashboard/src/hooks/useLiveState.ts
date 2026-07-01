@@ -41,6 +41,8 @@ export interface SystemState {
   cop?: number | null;
   grid_import?: number | null;
   price_eur_kwh?: number | null;
+  indoor_setpoint?: number | null;
+  indoor_humidity?: number | null;
 }
 
 export interface CurrentDecision {
